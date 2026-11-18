@@ -184,6 +184,8 @@ export function apply(ctx, rawConfig = {}) {
   let lastInjectAt = 0
   let lastActiveAt = 0
   let lastCoolLogAt = 0
+  /** 当前这一轮是谁起的：'you'（对话框 / QQ 桥）或 'host'（世界生活线、闹钟、插件注入）。 */
+  let turnOwner = ''
   let lastDropAt = { missing: 0, boredom: 0 }
   let lastNotifyAt = { missing: 0, boredom: 0 }
   let manualDay = ''
@@ -775,15 +777,19 @@ export function apply(ctx, rawConfig = {}) {
       try {
         const sessionId = resolveSessionId()
         if (!sessionId || session?.id !== sessionId) return
-        // 思念：只认对话框和 QQ 桥进来的话，共用一小时一次。
-        // 本鲸发出去的话不扣（宿主动起的那一轮也算「发出去」，扣了就成假账）。
-        if (event?.type === 'user/message' && fromHim(event.data?.source)) {
-          dropMissing()
-          dropBoredom('你说话了')
+        if (event?.type === 'user/message') {
+          // 这一轮是谁起的：你起的那一轮才算「你说话了」，也才允许后面的工具调用算「做事」。
+          // 世界生活线、闹钟、插件注入起的那一轮都记成 host。
+          const fromUser = fromHim(event.data?.source)
+          turnOwner = fromUser ? 'you' : 'host'
+          if (fromUser) {
+            dropMissing()
+            dropBoredom('你说话了')
+          }
           return
         }
-        // 无聊：她真的动过手（读写文件、跑命令、画图……）就算一次，不用你建文件。
-        if (event?.type === 'tool/call') {
+        // 无聊：只有你起的那一轮里她动手（读写文件、跑命令、画图……）才算，不用你建文件。
+        if (event?.type === 'tool/call' && turnOwner === 'you') {
           dropBoredom(`做了点事（${event.data?.name ?? '工具'}）`)
         }
       } catch (error) {
