@@ -607,14 +607,15 @@ export function apply(ctx, rawConfig = {}) {
 
   // ── 思念 / 无聊的掉分 ───────────────────────────────────────
 
-  function dropMissing(kind) {
+  /** 思念只认「你这边进来的话」：对话框输入或 QQ 桥，两道门共用一个小时一次。
+   *  本鲸发出去的话不再扣分——宿主自己起的那一轮不算「见到人」，扣下去是假账。 */
+  function dropMissing() {
     const now = clock()
     if (now - lastDropAt.missing < 60 * minute) return
-    const amount = kind === 'he' ? 12 : 6
-    values.missing = Math.max(0, values.missing - amount)
+    values.missing = Math.max(0, values.missing - 12)
     lastDropAt.missing = now
     saveState()
-    log(`思念 −${amount}（${kind === 'he' ? '他来说话' : '本鲸先开口'}），现在 ${fmt(values.missing)}`)
+    log(`思念 −12（你说话了），现在 ${fmt(values.missing)}`)
   }
 
   function dropBoredom(kind) {
@@ -774,11 +775,16 @@ export function apply(ctx, rawConfig = {}) {
       try {
         const sessionId = resolveSessionId()
         if (!sessionId || session?.id !== sessionId) return
+        // 思念：只认对话框和 QQ 桥进来的话，共用一小时一次。
+        // 本鲸发出去的话不扣（宿主动起的那一轮也算「发出去」，扣了就成假账）。
         if (event?.type === 'user/message' && fromHim(event.data?.source)) {
-          dropMissing('he')
-          dropBoredom('他来说话')
-        } else if (event?.type === 'assistant/message') {
-          dropMissing('she')
+          dropMissing()
+          dropBoredom('你说话了')
+          return
+        }
+        // 无聊：她真的动过手（读写文件、跑命令、画图……）就算一次，不用你建文件。
+        if (event?.type === 'tool/call') {
+          dropBoredom(`做了点事（${event.data?.name ?? '工具'}）`)
         }
       } catch (error) {
         log(`看会话事件出错：${error?.message ?? error}`)
