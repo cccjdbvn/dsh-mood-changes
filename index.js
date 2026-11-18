@@ -423,10 +423,11 @@ export function apply(ctx, rawConfig = {}) {
     return pairName(brightest)
   }
 
-  /** 亮起才投；名字和数值，别的都不加。 */
+  /** 亮起才投；名字和数值，别的都不加。单情亮起时不重复名字（写「悲 45.0」，不写「悲（悲 45.0）」）。 */
   function moodText() {
     const lit = litList()
     if (lit.length === 0) return undefined
+    if (lit.length === 1) return `【情绪】${CN[lit[0].key]} ${fmt(lit[0].v)}`
     return `【情绪】${nameFor(lit)}（${detail(lit)}）`
   }
 
@@ -443,10 +444,11 @@ export function apply(ctx, rawConfig = {}) {
     return { label: CN[top.key], lit: [], detail: topDetail, steady: false }
   }
 
-  /** 状态一句话，只进日志。 */
+  /** 状态一句话，只进日志：亮起就照注入那套说法（单情不重复名字）。 */
   function stateLine() {
+    const lit = moodText()
+    if (lit) return lit.replace('【情绪】', '')
     const state = describeState()
-    if (state.lit.length > 0) return `${state.label}（${state.detail}）`
     if (state.steady) return `平静（${state.detail}）`
     return state.detail
   }
@@ -611,14 +613,15 @@ export function apply(ctx, rawConfig = {}) {
   // ── 思念 / 无聊的掉分 ───────────────────────────────────────
 
   /** 思念只认「你这边进来的话」：对话框输入或 QQ 桥，两道门共用一个小时一次。
-   *  本鲸发出去的话不再扣分——宿主自己起的那一轮不算「见到人」，扣下去是假账。 */
+   *  减到原值的 0.8（不是减固定数）——越是想得厉害，一句话越抹不平；低位也不会一刀砍掉一半。
+   *  本鲸发出去的话不算——宿主自己起的那一轮不算「见到人」，扣下去是假账。 */
   function dropMissing() {
     const now = clock()
     if (now - lastDropAt.missing < 60 * minute) return
-    values.missing = Math.max(0, values.missing - 12)
+    values.missing = Math.max(0, values.missing * 0.8)
     lastDropAt.missing = now
     saveState()
-    log(`思念 −12（你说话了），现在 ${fmt(values.missing)}`)
+    log(`思念 ×0.8（你说话了），现在 ${fmt(values.missing)}`)
   }
 
   function dropBoredom(kind) {
