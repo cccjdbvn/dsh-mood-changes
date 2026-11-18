@@ -39,22 +39,23 @@ const THIRD_FROM = 25
 /** 参数稿七：思念 80 起不掷、直接提醒（第三档），30 起才掷。 */
 const MISSING_DIRECT_FROM = 80
 const MISSING_ROLL_FROM = 30
-/** 参数稿五：常用组合名，六个两两一共 15 组。三个以上亮起按最亮的两条取。 */
+/** 参数稿五：常用组合名，六个两两一共 15 组。三个以上亮起按最亮的两条取。
+ *  键按 SIX 的顺序拼（开心 → 悲伤 → 害怕 → 生气 → 惊讶 → 厌恶），配对时也照这个顺序排。 */
 const PAIR_NAMES = {
   'happy+sad': '悲喜交加',
-  'happy+anger': '又好气又好笑',
   'happy+fear': '喜忧参半',
+  'happy+anger': '又好气又好笑',
   'happy+surprise': '惊喜',
   'happy+disgust': '勉强高兴',
-  'sad+anger': '悲愤',
   'sad+fear': '惶恐悲哀',
+  'sad+anger': '悲愤',
   'sad+surprise': '错愕心酸',
   'sad+disgust': '嫌弃又难过',
-  'anger+fear': '敢怒不敢言',
-  'anger+surprise': '吃惊发怒',
-  'anger+disgust': '憎恶',
+  'fear+anger': '敢怒不敢言',
   'fear+surprise': '惊骇',
   'fear+disgust': '忌惮',
+  'anger+surprise': '吃惊发怒',
+  'anger+disgust': '憎恶',
   'surprise+disgust': '愕然反感',
 }
 
