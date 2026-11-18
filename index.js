@@ -23,12 +23,12 @@ import { homedir } from 'node:os'
 const SIX = ['happy', 'sad', 'fear', 'anger', 'surprise', 'disgust']
 const ALL = [...SIX, 'missing', 'boredom']
 const CN = {
-  happy: '乐',
-  sad: '悲',
-  fear: '惧',
-  anger: '怒',
-  surprise: '惊',
-  disgust: '厌',
+  happy: '开心',
+  sad: '悲伤',
+  fear: '害怕',
+  anger: '生气',
+  surprise: '惊讶',
+  disgust: '厌恶',
   missing: '思念',
   boredom: '无聊',
 }
@@ -414,7 +414,7 @@ export function apply(ctx, rawConfig = {}) {
     SIX.filter((key) => values[key] > Number(cfg.lightUpAt)).map((key) => ({ key, v: values[key] }))
 
   function nameFor(list) {
-    if (list.length <= 1) return list.map((item) => CN[item.key]).join('') || '平稳'
+    if (list.length <= 1) return list.map((item) => CN[item.key]).join('') || '平静'
     const brightest = [...list].sort((a, b) => b.v - a.v).slice(0, 2)
     return pairName(brightest)
   }
@@ -426,7 +426,7 @@ export function apply(ctx, rawConfig = {}) {
     return `【情绪】${nameFor(lit)}（${detail(lit)}）`
   }
 
-  /** 一句话说清此刻：亮起报名字（最亮两条取名），没亮报「平稳」或最高的那一条。 */
+  /** 一句话说清此刻：亮起报名字（最亮两条取名），没亮报「平静」或最高的那一条。 */
   function describeState() {
     const lit = litList()
     if (lit.length > 0) {
@@ -435,7 +435,7 @@ export function apply(ctx, rawConfig = {}) {
     const sorted = SIX.map((key) => ({ key, v: values[key] })).sort((a, b) => b.v - a.v)
     const top = sorted[0]
     const topDetail = `${CN[top.key]} ${fmt(top.v)}`
-    if (top.v < Number(cfg.calmBelow)) return { label: '平稳', lit: [], detail: topDetail, steady: true }
+    if (top.v < Number(cfg.calmBelow)) return { label: '平静', lit: [], detail: topDetail, steady: true }
     return { label: CN[top.key], lit: [], detail: topDetail, steady: false }
   }
 
@@ -443,7 +443,7 @@ export function apply(ctx, rawConfig = {}) {
   function stateLine() {
     const state = describeState()
     if (state.lit.length > 0) return `${state.label}（${state.detail}）`
-    if (state.steady) return `平稳（${state.detail}）`
+    if (state.steady) return `平静（${state.detail}）`
     return state.detail
   }
 
