@@ -36,8 +36,9 @@ const INDEX = Object.fromEntries(SIX.map((key, i) => [key, i]))
 
 /** 参数稿八：六情三档 0–5 / 5–25 / 25–30；三档触发主动核算。思念的 10–15 不触发。 */
 const THIRD_FROM = 25
-/** 这些工具只是排下一步，不算「做了点事」——生活线醒来先调 plan_next 不该减无聊。 */
-const PLANNING_TOOLS = new Set(['plan_next'])
+/** 这些是生活线的簿记动作，不算「做了点事」：排下一步、看一眼闹钟、撤掉闹钟。
+ *  真正干活的（读写文件、跑命令、画图、reach_out……）才减无聊。 */
+const NON_WORK_TOOLS = new Set(['plan_next', 'check_alarm', 'cancel_alarm'])
 /** 参数稿七：思念 80 起不掷、直接提醒（第三档），30 起才掷。 */
 const MISSING_DIRECT_FROM = 80
 const MISSING_ROLL_FROM = 30
@@ -784,10 +785,10 @@ export function apply(ctx, rawConfig = {}) {
           return
         }
         // 无聊：她真的动过手就算一次，不管这一轮是谁起的；
-        // 只有排程那类不算「做事」（plan_next 只是排下一步，不是干了活）。
+        // 只有生活线那几样簿记不算「做事」（plan_next / check_alarm / cancel_alarm）。
         if (event?.type === 'tool/call') {
           const name = String(event.data?.name ?? '')
-          if (!PLANNING_TOOLS.has(name)) dropBoredom(`做了点事（${name || '工具'}）`)
+          if (!NON_WORK_TOOLS.has(name)) dropBoredom(`做了点事（${name || '工具'}）`)
         }
       } catch (error) {
         log(`看会话事件出错：${error?.message ?? error}`)
