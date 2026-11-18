@@ -7,6 +7,14 @@
 - 作者：汐涟 · 协议：MIT
 - 没有构建步骤，没有依赖：`index.js` 是主机那半边，`client.js` 是浏览器那半边，改完就生效（见文末「改完怎么生效」）
 
+## 一眼看懂
+
+- **记数**：八个值存在 `$DSH_HOME/mood/state.json`。六情按半衰期自己退；思念按钟点涨（每小时 +2.0，夜里 +0.8）、他说话时乘 0.8；无聊每小时 +6.0（夜里不涨），有行动就减半。
+- **显示**：输入框下面一枚药丸写着当前状态名，点开是一张卡，六情 + 思念 + 无聊八根横杆带数值。
+- **提醒**：六情有值 > 40 就投一条（每小时最多一次）；思念 30 分起掷骰、80 分起直接提醒；无聊 50 分起掷、80 分起直接提醒。三条线名额各算各的。
+- **加减**：往 `room/情绪-加分.txt` 写一行 `happy+5`，下一跳（或建一个 `情绪-核算.now`）就吃进去。
+- **不写话**：投出来的全是状态和数字，它不替任何人说话。
+
 ## 目录
 
 1. [它怎么跑](#它怎么跑)
@@ -87,7 +95,7 @@ Host 里一个定时器，每跳按这个顺序走一遍，顺序不能反：
 
 1. 从 `life.json` 现读 `homeSessionId`（读不到就重试一次，还不行这一跳就跳过，不编 id）
 2. 拿活着的 agent；冷了就 `sessionController.resolveAgent(sessionId)` 唤一下
-3. 手搓一条 `role: 'user'` 的消息，`source.kind` 标成 `mood-lian`（标成 `user` 的话，回头会被自己当成「对方说话了」去扣思念）
+3. 手搓一条 `role: 'user'` 的消息，`source.kind` 标成 `mood-lian`（插件改名前的旧标记，留着是为了对上历史消息；标成 `user` 的话，回头会被自己当成「对方说话了」去扣思念）
 4. `agent.steer(message)` + `ctx.sessions.flush()`
 
 ## 文件都是干什么的
@@ -302,7 +310,7 @@ missing+8
 
 ## 装和接世界
 
-装：市场里搜 **Mood changes**，或者把仓库 clone 下来在插件管理里用目录安装。
+装：市场里搜 **Mood changes**，或者把仓库 clone 下来在插件管理里用目录安装。装完不用配任何东西，**第一次打开八个值都是 0，药丸显示「平静」**；不接世界时它只显示状态、不往会话里注入。
 
 不接世界时它只显示状态、不往会话里注入。要让它敲门，配置一个 `worldId`：
 
@@ -322,6 +330,24 @@ missing+8
 | `life.json` | 别的插件 | 只读里面的 `homeSessionId`，决定往哪个会话投 |
 | `$DSH_HOME/mood/state.json` | 插件 | 当前值 + 时间戳，唯一的真源 |
 | `$DSH_HOME/mood/mood.log` | 插件 | 每跳一行，出事好查 |
+
+`state.json` 长这样（唯一真源，重启从这儿接着走）：
+
+```json
+{
+  "values": { "happy": 36, "sad": 0, "fear": 0, "anger": 0,
+              "surprise": 0, "disgust": 0, "missing": 32.5, "boredom": 12 },
+  "lastTickAt": 1795000000000,
+  "lastInjectAt": 0,
+  "lastActiveAt": 0,
+  "lastDropAt": { "missing": 0, "boredom": 0 },
+  "lastNotifyAt": { "missing": 0, "boredom": 0 },
+  "manualDay": "2026-11-18",
+  "manualSum": 10
+}
+```
+
+`values` 八个当前值（一位小数）；`lastTickAt` 上一跳；`lastInjectAt` 六情上次注入；`lastActiveAt` 上次主动核算；`lastDropAt` 思念/无聊上次减；`lastNotifyAt` 思念/无聊上次提醒；`manualDay` + `manualSum` 今天思念手动加了多少。
 
 ## 规矩
 
