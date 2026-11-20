@@ -97,8 +97,12 @@ const DEFAULTS = {
   injectGapMinutes: 60,
   activeCooldownMinutes: 10,
   pollSeconds: 30,
-  boredomPerHour: 6,
+  /** 无聊每小时涨多少；默认一跳 15 分钟，折算下来每跳 +4.5。夜里不涨。 */
+  boredomPerHour: 18,
+  /** 她动手做事时无聊乘多少；他说话走 boredomTalkDropFactor。两条共用一个小时的冷却。 */
   boredomDropFactor: 0.5,
+  /** 他从对话框或 QQ 桥说话时无聊乘多少。 */
+  boredomTalkDropFactor: 0.7,
   boredomDropCooldownMinutes: 60,
   boredomRollFrom: 50,
   boredomDirectFrom: 80,
@@ -178,11 +182,15 @@ export function apply(ctx, rawConfig = {}) {
   const minute = 60 * 1000
   const sweepMs = Math.max(1, Number(cfg.sweepEveryMinutes) || 15) * minute
   const pollMs = Math.max(1, Number(cfg.pollSeconds) || 30) * 1000
+  /** 白天的无聊每跳涨多少：按每小时速率折算到这一跳。 */
+  const boredomPerTick = Number(cfg.boredomPerHour) * (sweepMs / (60 * minute))
   const clock = () => Date.now()
 
   let stopped = false
   let ticking = false
   let settling = false
+  /** 当前这一段是夜里还是白天。每跳涨完看一次表，跨进 / 跨出夜里时切。 */
+  let modeNight = false
   let lastTickAt = 0
   let lastInjectAt = 0
   let lastActiveAt = 0
@@ -277,6 +285,18 @@ export function apply(ctx, rawConfig = {}) {
     const start = Number(cfg.nightStart)
     const end = Number(cfg.nightEnd)
     return start <= end ? hour >= start && hour < end : hour >= start || hour < end
+  }
+
+  /** 涨完再看表：跨进 / 跨出夜里就切一段。模式管两件事：下一跳起怎么涨，掷骰开不开。 */
+  function switchNight(now) {
+    const next = nightNow(now)
+    if (next === modeNight) return
+    modeNight = next
+    log(
+      next
+        ? '进了夜里：掷骰停掉，下一跳起思念打折、无聊不涨'
+        : '出了夜里：掷骰开起来，下一跳起照白天的涨法',
+    )
   }
 
   function capOf(key) {
@@ -529,13 +549,15 @@ export function apply(ctx, rawConfig = {}) {
     }
   }
 
+  /** 80 之前是敲门：报个数，问她一句；80 起是第三档，换一句更重的话，仍旧只报状态。 */
   function missingText() {
     const value = values.missing
-    if (value < MISSING_DIRECT_FROM) return `【思念】${fmt(value)}`
-    return `【思念】${fmt(value)}（第三档）`
+    if (value < MISSING_DIRECT_FROM) return `思念${fmt(value)}，要不要和主人说句话？`
+    return `思念 ${fmt(value)}，好些时候没和主人说话了。`
   }
 
-  const boredomText = () => `【无聊】${fmt(values.boredom)}`
+  /** 无聊的提醒一律是敲门：报个数，问一句。 */
+  const boredomText = () => `无聊 ${fmt(values.boredom)}，要不要自己做点什么？`
 
   async function notifyMissing() {
     const now = clock()
@@ -557,7 +579,7 @@ export function apply(ctx, rawConfig = {}) {
 
   // ── 核算：两趟，共用吃增量，不共用衰减 ──────────────────────
 
-  /** 定时那趟：吃增量 → 衰减一次 → 加增量 → 加钟点分 → 封顶 → 落盘 → 判亮起。 */
+  /** 定时那趟：吃增量 → 衰减一次 → 加增量 → 按这一段加钟点分 → 封顶 → 落盘 → 判亮起 → 涨完看表切模式。 */
   async function tick() {
     if (ticking || stopped) return
     ticking = true
@@ -566,13 +588,15 @@ export function apply(ctx, rawConfig = {}) {
       decaySix()
       const deltas = collect()
       applyDeltas(deltas)
-      const night = nightNow(now)
-      values.missing += 0.5 * (night ? Number(cfg.nightMultiplier) : 1)
-      values.boredom += night ? 0 : Number(cfg.boredomPerHour) * (sweepMs / (60 * minute))
+      // 这一跳按进来时的模式涨；涨完再看表，切换下一跳的模式
+      const carriedNight = modeNight
+      values.missing += 0.5 * (carriedNight ? Number(cfg.nightMultiplier) : 1)
+      values.boredom += carriedNight ? 0 : boredomPerTick
       clampAll()
       lastTickAt = now
       saveState()
-      log(`定时核算（${night ? '夜里' : '白天'}）：${valuesLine()}｜${stateLine()}`)
+      log(`定时核算（${carriedNight ? '夜里' : '白天'}）：${valuesLine()}｜${stateLine()}`)
+      switchNight(now)
       await injectMood(true)
     } catch (error) {
       log(`定时核算出错：${error?.message ?? error}`)
@@ -624,13 +648,15 @@ export function apply(ctx, rawConfig = {}) {
     log(`思念 ×0.8（你说话了），现在 ${fmt(values.missing)}`)
   }
 
-  function dropBoredom(kind) {
+  /** 无聊掉分：他说话走 0.7，做事走 0.5；两条共用同一个小时一次（lastDropAt.boredom）。 */
+  function dropBoredom(kind, factor) {
     const now = clock()
     if (now - lastDropAt.boredom < Number(cfg.boredomDropCooldownMinutes) * minute) return
-    values.boredom = Math.max(0, values.boredom * Number(cfg.boredomDropFactor))
+    const f = Number.isFinite(Number(factor)) ? Number(factor) : Number(cfg.boredomDropFactor)
+    values.boredom = Math.max(0, values.boredom * f)
     lastDropAt.boredom = now
     saveState()
-    log(`无聊 ×${cfg.boredomDropFactor}（${kind}），现在 ${fmt(values.boredom)}`)
+    log(`无聊 ×${f}（${kind}），现在 ${fmt(values.boredom)}`)
   }
 
   /** 「他来说话」的判据：用户直接输入的，或者 QQ 桥送进来的；自己投的那条不算。 */
@@ -645,7 +671,7 @@ export function apply(ctx, rawConfig = {}) {
   // ── 骰子 ────────────────────────────────────────────────────
 
   async function rollMissing() {
-    if (stopped) return
+    if (stopped || modeNight) return
     const value = values.missing
     if (value < MISSING_ROLL_FROM) return
     if (value >= MISSING_DIRECT_FROM) {
@@ -656,7 +682,7 @@ export function apply(ctx, rawConfig = {}) {
   }
 
   async function rollBoredom() {
-    if (stopped) return
+    if (stopped || modeNight) return
     const value = values.boredom
     if (value < Number(cfg.boredomRollFrom)) return
     if (value >= Number(cfg.boredomDirectFrom)) {
@@ -670,8 +696,9 @@ export function apply(ctx, rawConfig = {}) {
 
   loadState()
   lastTickAt = clock() // 只认开机时间：关机那段整段冻住，不补算
+  modeNight = nightNow(lastTickAt) // 开机按当时的钟点认一段，不补跨段
   saveState()
-  log(`起来了：${valuesLine()}`)
+  log(`起来了（${modeNight ? '夜里' : '白天'}）：${valuesLine()}`)
   log(`路径：数据 ${dataDir}｜房间 ${roomDir || '（没配 worldId，加分和三只文件都不接）'}｜会话 ${lifeFile || '—'}`)
 
   const disposers = []
@@ -755,7 +782,7 @@ export function apply(ctx, rawConfig = {}) {
           }
           if (existsSync(actPath)) {
             rmSync(actPath, { force: true })
-            dropBoredom('自己做事')
+            dropBoredom('自己做事', cfg.boredomDropFactor)
           }
         } catch (error) {
           log(`扫描出错：${error?.message ?? error}`)
@@ -784,14 +811,14 @@ export function apply(ctx, rawConfig = {}) {
         // 思念：只认对话框和 QQ 桥进来的话，共用一小时一次；本鲸发出去的话不扣。
         if (event?.type === 'user/message' && fromHim(event.data?.source)) {
           dropMissing()
-          dropBoredom('你说话了')
+          dropBoredom('你说话了', cfg.boredomTalkDropFactor)
           return
         }
         // 无聊：她真的动过手就算一次，不管这一轮是谁起的；
         // 只有生活线那几样簿记不算「做事」（plan_next / check_alarm / cancel_alarm）。
         if (event?.type === 'tool/call') {
           const name = String(event.data?.name ?? '')
-          if (!NON_WORK_TOOLS.has(name)) dropBoredom(`做了点事（${name || '工具'}）`)
+          if (!NON_WORK_TOOLS.has(name)) dropBoredom(`做了点事（${name || '工具'}）`, cfg.boredomDropFactor)
         }
       } catch (error) {
         log(`看会话事件出错：${error?.message ?? error}`)
