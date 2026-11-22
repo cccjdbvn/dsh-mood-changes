@@ -48,6 +48,23 @@ export function apply(ctx, config) {
   // Per-agent status bar instances
   const statusBars = new Map();
 
+  // State write-back throttle: at most once every 3 minutes from handleMessage
+  const STATE_SAVE_INTERVAL = 180000; // 3 min
+  let lastStateSaveAt = 0;
+  let stateDirty = false;
+
+  function fireAndForget(promise) {
+    promise.catch(() => {});
+  }
+
+  async function saveStateIfDirty(now) {
+    if (stateDirty && (now - lastStateSaveAt) >= STATE_SAVE_INTERVAL) {
+      stateDirty = false;
+      lastStateSaveAt = now;
+      await store.saveState(state);
+    }
+  }
+
   // --- Initialization ---
   async function init() {
     state = await store.loadState();
@@ -95,12 +112,12 @@ export function apply(ctx, config) {
 
     // Log missing cross-threshold
     if (missingResult.crossedThreshold) {
-      await log.append({
+      fireAndForget(log.append({
         ts: now, block: '思念', emotion: '思念',
         delta: missingResult.delta,
         reason: `跨档：→ ${missingResult.thresholdLabel}`,
         stateNote: States.formatActive(state.states) || '—'
-      });
+      }));
     }
 
     // 5. Clamp
@@ -109,7 +126,9 @@ export function apply(ctx, config) {
     // 6. Expire states
     States.expire(state.states, now);
 
-    // 7. Save
+    // 7. Save (flush any dirty state from handleMessage as well)
+    stateDirty = false;
+    lastStateSaveAt = now;
     state.lastTickAt = now;
     await store.saveState(state);
 
@@ -148,11 +167,11 @@ export function apply(ctx, config) {
     // Boredom drop: any message → ×0.7
     const boredomDrop = Boredom.drop(state.boredom, now, 'msg');
     if (boredomDrop > 0) {
-      await log.append({
+      fireAndForget(log.append({
         ts: now, block: '无聊', emotion: '无聊',
         delta: -Math.round(boredomDrop * 10) / 10,
         reason: '有人说话了 ×0.7'
-      });
+      }));
     }
 
     // Check if this is likely from the owner (DSH input box, not external bridge)
@@ -189,12 +208,12 @@ export function apply(ctx, config) {
       const herLabel = await empathy.labelFor(herResult.key);
       for (const d of deltas) {
         const blockName = MoodLog.blockForBase(d.base);
-        await log.append({
+        fireAndForget(log.append({
           ts: now, block: blockName, emotion: `${herLabel} ${herResult.key}`,
           delta: d.delta,
           reason: (hisEmotion.evidence || text).slice(0, 70),
           stateNote: States.formatActive(state.states) || '—'
-        });
+        }));
       }
 
       // Coupling: event propagation
@@ -202,12 +221,12 @@ export function apply(ctx, config) {
         const propagated = Coupling.propagate(state.values, d.base, d.delta);
         for (const p of propagated) {
           const pBlock = MoodLog.blockForBase(p.base);
-          await log.append({
+          fireAndForget(log.append({
             ts: now, block: pBlock, emotion: '传播',
             delta: p.delta,
             reason: `由 ${MoodLog.blockForBase(p.parent)} 传播`,
             stateNote: '—'
-          });
+          }));
         }
       }
 
@@ -216,12 +235,12 @@ export function apply(ctx, config) {
       if (stateDef) {
         if (stateDef.when === 'fromUser' && !isOwner) continue;
         States.activate(state.states, stateDef, now, herResult.key);
-        await log.append({
+        fireAndForget(log.append({
           ts: now, block: '状态', emotion: stateDef.name,
           delta: 0,
           reason: `触发：${herLabel}`,
           stateNote: `${stateDef.minutes || 60}min`
-        });
+        }));
       }
 
       // Immediate settlement for strong hits (>20)
@@ -243,7 +262,9 @@ export function apply(ctx, config) {
       MoodPool.clamp(state.values);
     }
 
-    await store.saveState(state);
+    // Throttled save: write at most once per 3 minutes
+    stateDirty = true;
+    saveStateIfDirty(now).catch(() => {});
   }
 
   // --- Agent lifecycle ---
@@ -301,12 +322,13 @@ export function apply(ctx, config) {
     const now = Date.now();
     const drop = Boredom.drop(state.boredom, now, 'tool');
     if (drop > 0) {
-      log.append({
+      fireAndForget(log.append({
         ts: now, block: '无聊', emotion: '无聊',
         delta: -Math.round(drop * 10) / 10,
         reason: `做了件事（${exec.name}）×0.5`
-      }).catch(() => {});
-      store.saveState(state).catch(() => {});
+      }));
+      stateDirty = true;
+      saveStateIfDirty(now).catch(() => {});
     }
   });
 
@@ -321,5 +343,9 @@ export function apply(ctx, config) {
   return () => {
     tickInterval();
     for (const d of toolDisposers) d();
+    // Force final save if dirty
+    if (stateDirty && state) {
+      store.saveState(state).catch(() => {});
+    }
   };
 }
