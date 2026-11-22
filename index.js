@@ -1,907 +1,325 @@
-/**
- * dsh-mood-changes（Mood changes） —— 汐涟的情绪插件
- *
- * 规则照作者的「情绪插件-参数稿 / 实现说明」两份文件；这里不自己发挥。
- *
- * 只敲门，不替人说话：注入出去的全是状态，没有一句台词。
- * 不碰 dsh-world、规矩本、日记、条目库；只读 life.json 里的 homeSessionId。
- */
-import { randomUUID } from 'node:crypto'
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
-import { dirname, join } from 'node:path'
-import { homedir } from 'node:os'
+import { MoodStore } from './lib/store.js';
+import { MoodPool } from './lib/pool.js';
+import { Judge } from './lib/judge.js';
+import { Empathy } from './lib/empathy.js';
+import { MoodLog } from './lib/log.js';
+import { Coupling } from './lib/coupling.js';
+import { Missing } from './lib/missing.js';
+import { Boredom } from './lib/boredom.js';
+import { States } from './lib/states.js';
+import { StatusBar } from './lib/statusbar.js';
+import { registerRoutes } from './lib/routes.js';
+import { registerTools } from './lib/tools.js';
 
-const SIX = ['happy', 'sad', 'fear', 'anger', 'surprise', 'disgust']
-const ALL = [...SIX, 'missing', 'boredom']
-const CN = {
-  happy: '开心',
-  sad: '悲伤',
-  fear: '害怕',
-  anger: '生气',
-  surprise: '惊讶',
-  disgust: '厌恶',
-  missing: '思念',
-  boredom: '无聊',
-}
-const INDEX = Object.fromEntries(SIX.map((key, i) => [key, i]))
-
-/** 参数稿八：六情三档 0–5 / 5–25 / 25–30；三档触发主动核算。思念的 10–15 不触发。 */
-const THIRD_FROM = 25
-/** 这些是生活线的簿记动作，不算「做了点事」：排下一步、看一眼闹钟、撤掉闹钟。
- *  真正干活的（读写文件、跑命令、画图、reach_out……）才减无聊。 */
-const NON_WORK_TOOLS = new Set(['plan_next', 'check_alarm', 'cancel_alarm'])
-/** 参数稿七：思念 80 起不掷、直接提醒（第三档），30 起才掷。 */
-const MISSING_DIRECT_FROM = 80
-const MISSING_ROLL_FROM = 30
-/** 参数稿五：常用组合名，六个两两一共 15 组。三个以上亮起按最亮的两条取。
- *  键按 SIX 的顺序拼（开心 → 悲伤 → 害怕 → 生气 → 惊讶 → 厌恶），配对时也照这个顺序排。 */
-const PAIR_NAMES = {
-  'happy+sad': '悲喜交加',
-  'happy+fear': '喜忧参半',
-  'happy+anger': '又好气又好笑',
-  'happy+surprise': '惊喜',
-  'happy+disgust': '勉强高兴',
-  'sad+fear': '惶恐悲哀',
-  'sad+anger': '悲愤',
-  'sad+surprise': '错愕心酸',
-  'sad+disgust': '嫌弃又难过',
-  'fear+anger': '敢怒不敢言',
-  'fear+surprise': '惊骇',
-  'fear+disgust': '忌惮',
-  'anger+surprise': '吃惊发怒',
-  'anger+disgust': '憎恶',
-  'surprise+disgust': '愕然反感',
-}
-
-/** 参数表。定制改 patch 里那一张；这里的默认值跟参数稿对齐。 */
-const DEFAULTS = {
-  /** 空 = <DSH_HOME>/mood（DSH_HOME 没有就用 ~/.dsh） */
-  dataDir: '',
-  /** 填了 world 的 id，房间和 life.json 就照它推出来；空 = 不接世界，只显示状态 */
-  worldId: '',
-  /** 空 = <DSH_HOME>/worlds/<worldId>/room */
-  roomDir: '',
-  /** 空 = <DSH_HOME>/worlds/<worldId>/life.json */
-  lifeFile: '',
-  /** 留空就跟着 life.json 的 homeSessionId 走；填了就认填的那个。 */
-  sessionId: '',
-  sweepEveryMinutes: 15,
-  nightStart: 23,
-  nightEnd: 7,
-  nightMultiplier: 0.4,
-  decimals: 1,
-  /** 思念一天的手动加分上限；六情不封顶。 */
-  manualDailyCap: 40,
-  joyHalfLifeHours: 5,
-  sadHalfLifeHours: 10,
-  fearHalfLifeHours: 12,
-  angerHalfLifeHours: 6,
-  surpriseHalfLifeHours: 2.5,
-  disgustHalfLifeHours: 30,
-  capHigh: 100,
-  capNormal: 100,
-  lightUpAt: 40,
-  calmBelow: 20,
-  nearGap: 5,
-  rollEveryMinutes: 45,
-  rollCooldownMinutes: 60,
-  injectGapMinutes: 60,
-  activeCooldownMinutes: 10,
-  pollSeconds: 30,
-  /** 无聊每小时涨多少；默认一跳 15 分钟，折算下来每跳 +4.5。夜里不涨。 */
-  boredomPerHour: 18,
-  /** 她动手做事时无聊乘多少；他说话走 boredomTalkDropFactor。 */
-  boredomDropFactor: 0.5,
-  /** 他从对话框或 QQ 桥说话时无聊乘多少。 */
-  boredomTalkDropFactor: 0.7,
-  /** A=他说话、B=她做事：同一种事件（A 接 A / B 接 B）多久内不再掉。 */
-  boredomSameCooldownMinutes: 60,
-  /** 两种事件之间（A 后接 B / B 后接 A）多久内不再掉。 */
-  boredomCrossCooldownMinutes: 30,
-  boredomRollFrom: 50,
-  boredomDirectFrom: 80,
-}
-
-/** 乐的积分变换（参数稿附录，2026-11-18 下午换的）：F(0)=0，F'(0)=1/3，F(100)=∞。 */
-const JOY_MAX = 99.9
-const joyF = (x) => {
-  const v = Math.min(JOY_MAX, Math.max(0, x))
-  return (47 * v) / 165 + (578 / 33) * Math.log(1 - v / 100) + (246 / 11) * (v / (100 - v))
-}
-/** 反解没有闭式，二分。区间 [x, 99.9]，60 次就够。 */
-function joyAdd(x, a) {
-  const target = joyF(x) + a
-  if (joyF(JOY_MAX) <= target) return JOY_MAX
-  let lo = Math.min(JOY_MAX, Math.max(0, x))
-  let hi = JOY_MAX
-  for (let i = 0; i < 60; i += 1) {
-    const mid = (lo + hi) / 2
-    if (joyF(mid) < target) lo = mid
-    else hi = mid
-  }
-  return (lo + hi) / 2
-}
-
-/** 思念和无聊共用这条概率曲线（参数稿七、七之二）。 */
-const rollChance = (x) => 1 / (Math.exp(6.25 - 0.1 * x) + 1)
-
-const pad = (n) => String(n).padStart(2, '0')
-const localDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-function localIso(d) {
-  const offset = -d.getTimezoneOffset()
-  const sign = offset >= 0 ? '+' : '-'
-  const hh = pad(Math.floor(Math.abs(offset) / 60))
-  const mm = pad(Math.abs(offset) % 60)
-  return `${localDate(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}${sign}${hh}:${mm}`
-}
-
-/** 定时器用 ctx.interval / ctx.timeout，得先把 timer 声明成依赖。 */
-export const inject = ['timer']
-
-export function apply(ctx, rawConfig = {}) {
-  const cfg = { ...DEFAULTS }
-  for (const [key, value] of Object.entries(rawConfig ?? {})) {
-    if (key === 'sessionId') {
-      cfg.sessionId = value == null ? '' : String(value)
-      continue
-    }
-    if (value === undefined || value === null || value === '') continue
-    cfg[key] = value
-  }
-
-  // 路径：能配就听配置，没配就从 DSH_HOME 推；world 相关的两样靠 worldId
-  const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
-  const worldId = String(cfg.worldId ?? '').trim()
-  const dataDir = cfg.dataDir ? String(cfg.dataDir) : join(dshHome, 'mood')
-  const roomDir = cfg.roomDir
-    ? String(cfg.roomDir)
-    : worldId
-      ? join(dshHome, 'worlds', worldId, 'room')
-      : ''
-  const lifeFile = cfg.lifeFile
-    ? String(cfg.lifeFile)
-    : worldId
-      ? join(dshHome, 'worlds', worldId, 'life.json')
-      : ''
-  const statePath = join(dataDir, 'state.json')
-  const logPath = join(dataDir, 'mood.log')
-  const plusPath = roomDir ? join(roomDir, '情绪-加分.txt') : undefined
-  const settlePath = roomDir ? join(roomDir, '情绪-核算.now') : undefined
-  const actPath = roomDir ? join(roomDir, '情绪-做事.now') : undefined
-
-  const decimals = Math.max(0, Math.min(6, Number(cfg.decimals) || 0))
-  const unit = Math.pow(10, decimals)
-  const round = (value) => Math.round(value * unit) / unit
-  const fmt = (value) => round(value).toFixed(decimals)
-  const minute = 60 * 1000
-  const sweepMs = Math.max(1, Number(cfg.sweepEveryMinutes) || 15) * minute
-  const pollMs = Math.max(1, Number(cfg.pollSeconds) || 30) * 1000
-  const rollMs = Math.max(1, Number(cfg.rollEveryMinutes) || 45) * minute
-  /** 白天的无聊每跳涨多少：按每小时速率折算到这一跳。 */
-  const boredomPerTick = Number(cfg.boredomPerHour) * (sweepMs / (60 * minute))
-  const clock = () => Date.now()
-
-  let stopped = false
-  let ticking = false
-  let settling = false
-  /** 当前这一段是夜里还是白天。每跳涨完看一次表，跨进 / 跨出夜里时切。 */
-  let modeNight = false
-  let lastTickAt = 0
-  let lastInjectAt = 0
-  let lastActiveAt = 0
-  let lastCoolLogAt = 0
-  let lastDropAt = { missing: 0, talk: 0, work: 0 }
-  let lastNotifyAt = { missing: 0, boredom: 0 }
-  let manualDay = ''
-  let manualSum = 0
-  let lastHitAt = { missing: 0, boredom: 0 }
-  let lastRoll = { missing: { at: 0, result: '' }, boredom: { at: 0, result: '' } }
-  let values = Object.fromEntries(ALL.map((key) => [key, 0]))
-  let lifeCache = { mtime: -1, id: undefined }
-
-  function log(message) {
-    try {
-      mkdirSync(dirname(logPath), { recursive: true })
-      appendFileSync(logPath, `${localIso(new Date())} ${message}\n`)
-    } catch {
-      // 日志写不进去不该拖垮插件
+export const Config = {
+  schema: {
+    type: 'object',
+    properties: {
+      judgeBaseUrl: { type: 'string', description: '本地 LLM 端点', default: 'http://127.0.0.1:1234/v1' },
+      judgeApiKey: { type: 'string', description: 'API Key（可选）', default: '' },
+      judgeModel: { type: 'string', description: '模型名', default: 'local-model' },
+      judgeTimeout: { type: 'number', description: '请求超时（毫秒）', default: 3000 },
+      judgeTemperature: { type: 'number', description: '采样温度', default: 0.3 },
+      tickIntervalMs: { type: 'number', description: 'tick 间隔（毫秒）', default: 900000 },
+      worldDir: { type: 'string', description: '世界目录路径（存放 state 和日志）', default: '' }
     }
   }
+};
 
-  // ── 状态文件 ────────────────────────────────────────────────
-
-  function resetState() {
-    values = Object.fromEntries(ALL.map((key) => [key, 0]))
-    lastTickAt = clock()
-    lastInjectAt = 0
-    lastActiveAt = 0
-    lastDropAt = { missing: 0, talk: 0, work: 0 }
-    lastNotifyAt = { missing: 0, boredom: 0 }
-    manualDay = localDate(new Date())
-    manualSum = 0
-    lastHitAt = { missing: 0, boredom: 0 }
-    lastRoll = { missing: { at: 0, result: '' }, boredom: { at: 0, result: '' } }
+export function apply(ctx, config) {
+  const worldDir = config.worldDir;
+  if (!worldDir) {
+    ctx.logger?.warn?.('[dsh-mood] worldDir not configured; plugin inactive');
+    return;
   }
 
-  const readJson = (path) => JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''))
+  const store = new MoodStore(worldDir);
+  const judge = new Judge(config);
+  const empathy = new Empathy();
+  const log = new MoodLog(worldDir);
 
-  function loadState() {
-    resetState()
-    if (!existsSync(statePath)) return
-    let parsed
-    try {
-      parsed = readJson(statePath)
-      if (!parsed || typeof parsed !== 'object') throw new Error('不是对象')
-    } catch (error) {
-      const broken = `${statePath}.broken-${localIso(new Date()).replace(/[:.]/g, '-')}`
-      try {
-        renameSync(statePath, broken)
-      } catch {
-        // 备份失败就照原样放着，不在日志里假装备份过
-      }
-      resetState()
-      log(`state.json 读不动（${error.message}），已备份成 ${broken}，从零起`)
-      return
-    }
-    if (parsed.values && typeof parsed.values === 'object') {
-      for (const key of ALL) {
-        const value = Number(parsed.values[key])
-        values[key] = Number.isFinite(value) ? value : 0
+  // Mutable state (loaded from disk on start)
+  let state = null;
+  let baseline = { happy: 15, sad: 5, fear: 5, anger: 0, surprise: 0, disgust: 5 };
+
+  // Ref for tools to access current baseline
+  const baselineRef = { current: baseline };
+
+  // Per-agent status bar instances
+  const statusBars = new Map();
+
+  // --- Initialization ---
+  async function init() {
+    state = await store.loadState();
+    baseline = await store.loadBaseline();
+    baselineRef.current = { ...baseline };
+    // Ensure queue exists
+    if (!state.queue) state.queue = [];
+  }
+
+  // --- Tick ---
+  async function tick(now) {
+    if (!state) return;
+
+    const dtMs = now - (state.lastTickAt || now);
+    if (dtMs < 60000) return; // Minimum 1 minute between ticks
+
+    // 1. Decay
+    state.values = MoodPool.decay(state.values, baseline, dtMs);
+
+    // 2. Apply event queue
+    const queue = store.drainQueue(state);
+    for (const entry of queue) {
+      const deltas = entry.deltas || [];
+      for (const d of deltas) {
+        // Apply state modifiers to the delta
+        const mods = States.compositeMod(state.states);
+        let factor = 1;
+        if (d.base && mods[d.base]) factor = mods[d.base];
+        const adjustedDelta = d.delta * factor;
+
+        MoodPool.apply(state.values, d.base, adjustedDelta, d.cap || 25);
       }
     }
-    if (Number.isFinite(Number(parsed.lastTickAt))) lastTickAt = Number(parsed.lastTickAt)
-    if (Number.isFinite(Number(parsed.lastInjectAt))) lastInjectAt = Number(parsed.lastInjectAt)
-    if (Number.isFinite(Number(parsed.lastActiveAt))) lastActiveAt = Number(parsed.lastActiveAt)
-    for (const key of ['missing', 'boredom']) {
-      const notify = Number(parsed.lastNotifyAt?.[key])
-      if (Number.isFinite(notify)) lastNotifyAt[key] = notify
+
+    // 3. Coupling: tick damping
+    Coupling.dampen(state.values, 0); // Start at 0, increase after a week
+
+    // 4. Missing & Boredom tick
+    const missingGain = States.missingGainMultiplier(state.states);
+    const missingStep = States.missingStepBonus(state.states);
+    const missingResult = Missing.tick(state.missing, now, missingGain, missingStep);
+
+    const boredomStep = States.boredomStepBonus(state.states);
+    Boredom.tick(state.boredom, now, boredomStep);
+
+    // Log missing cross-threshold
+    if (missingResult.crossedThreshold) {
+      await log.append({
+        ts: now, block: '思念', emotion: '思念',
+        delta: missingResult.delta,
+        reason: `跨档：→ ${missingResult.thresholdLabel}`,
+        stateNote: States.formatActive(state.states) || '—'
+      });
     }
-    for (const key of ['missing', 'talk', 'work']) {
-      const drop = Number(parsed.lastDropAt?.[key])
-      if (Number.isFinite(drop)) lastDropAt[key] = drop
-    }
-    // 旧账：原来只有一个 boredom 时间戳，两边都认它，免得升级后当场多掉一次
-    const legacyDrop = Number(parsed.lastDropAt?.boredom)
-    if (Number.isFinite(legacyDrop) && legacyDrop > 0) {
-      if (!lastDropAt.talk) lastDropAt.talk = legacyDrop
-      if (!lastDropAt.work) lastDropAt.work = legacyDrop
-    }
-    if (typeof parsed.manualDay === 'string') manualDay = parsed.manualDay
-    if (Number.isFinite(Number(parsed.manualSum))) manualSum = Number(parsed.manualSum)
-    for (const line of ['missing', 'boredom']) {
-      const roll = parsed.lastRoll?.[line]
-      const at = Number(roll?.at)
-      if (Number.isFinite(at) && (roll?.result === 'hit' || roll?.result === 'miss')) {
-        lastRoll[line] = { at, result: roll.result }
-      }
-      const hitAt = Number(parsed.lastHitAt?.[line])
-      if (Number.isFinite(hitAt) && hitAt > 0) lastHitAt[line] = hitAt
-    }
-  }
 
-  function saveState() {
-    const out = {
-      values: Object.fromEntries(ALL.map((key) => [key, round(values[key])])),
-      lastTickAt,
-      lastInjectAt,
-      lastActiveAt,
-      lastDropAt,
-      lastNotifyAt,
-      manualDay,
-      manualSum: round(manualSum),
-      lastRoll: {
-        missing: { ...lastRoll.missing },
-        boredom: { ...lastRoll.boredom },
-      },
-      lastHitAt: { ...lastHitAt },
-    }
-    mkdirSync(dirname(statePath), { recursive: true })
-    writeFileSync(statePath, `${JSON.stringify(out, null, 2)}\n`)
-  }
+    // 5. Clamp
+    MoodPool.clamp(state.values);
 
-  // ── 数值 ────────────────────────────────────────────────────
+    // 6. Expire states
+    States.expire(state.states, now);
 
-  function nightNow(now) {
-    const hour = new Date(now).getHours()
-    const start = Number(cfg.nightStart)
-    const end = Number(cfg.nightEnd)
-    return start <= end ? hour >= start && hour < end : hour >= start || hour < end
-  }
+    // 7. Save
+    state.lastTickAt = now;
+    await store.saveState(state);
 
-  /** 涨完再看表：跨进 / 跨出夜里就切一段。模式管两件事：下一跳起怎么涨，掷骰开不开。 */
-  function switchNight(now) {
-    const next = nightNow(now)
-    if (next === modeNight) return
-    modeNight = next
-    log(
-      next
-        ? '进了夜里：掷骰停掉，下一跳起思念打折、无聊不涨'
-        : '出了夜里：掷骰开起来，下一跳起照白天的涨法',
-    )
-  }
-
-  function capOf(key) {
-    if (key === 'happy') return JOY_MAX
-    if (key === 'missing' || key === 'boredom') return 100
-    return key === 'disgust' ? Number(cfg.capNormal) : Number(cfg.capHigh)
-  }
-
-  function clampAll() {
-    for (const key of ALL) {
-      values[key] = Math.min(capOf(key), Math.max(0, values[key]))
-    }
-  }
-
-  const keepFactor = (hours) => Math.pow(0.5, 0.25 / Math.max(0.01, hours))
-  const halfLife = {
-    happy: () => Number(cfg.joyHalfLifeHours),
-    sad: () => Number(cfg.sadHalfLifeHours),
-    fear: () => Number(cfg.fearHalfLifeHours),
-    anger: () => Number(cfg.angerHalfLifeHours),
-    surprise: () => Number(cfg.surpriseHalfLifeHours),
-    disgust: () => Number(cfg.disgustHalfLifeHours),
-  }
-
-  /** 参数稿四：先乘衰减系数，再加增量，最后封顶；低于 0.05 归零。只在定时那趟调。 */
-  function decaySix() {
-    for (const key of SIX) {
-      const k = keepFactor(halfLife[key]())
-      let value = values[key] * k
-      if (value < 0.05) value = 0
-      values[key] = value
-    }
-  }
-
-  /** 参数稿三：只有 happy 的正增量走积分；其余（含 happy 的负值）直接在 x 上加减。 */
-  function applyDeltas(deltas) {
-    const today = localDate(new Date())
-    if (manualDay !== today) {
-      manualDay = today
-      manualSum = 0
-    }
-    for (const key of ALL) {
-      const delta = deltas[key]
-      if (!delta) continue
-      if (key === 'happy' && delta > 0) {
-        values.happy = joyAdd(values.happy, delta)
-        continue
-      }
-      if (delta < 0) {
-        values[key] = Math.max(0, values[key] + delta)
-        continue
-      }
-      let add = delta
-      if (key === 'missing') {
-        const remain = Math.max(0, Number(cfg.manualDailyCap) - manualSum)
-        add = Math.min(add, remain)
-        manualSum += add
-      }
-      values[key] += add
-    }
-  }
-
-  // ── 加分队列 ────────────────────────────────────────────────
-
-  function readQueue(fn) {
-    if (!plusPath || !existsSync(plusPath)) return undefined
-    let content
-    try {
-      content = readFileSync(plusPath, 'utf8')
-    } catch (error) {
-      log(`加分文件读不动：${error.message}`)
-      return undefined
-    }
-    return fn(content)
-  }
-
-  /** 只看不动：文件里有没有第三档（六情 25–30 那一档）。 */
-  function hasThirdTier() {
-    return (
-      readQueue((content) =>
-        content.split(/\r?\n/).some((raw) => {
-          const line = raw.trim()
-          if (!line || line.startsWith('#')) return false
-          const match = /^([a-z]+)([+-]\d+(?:\.\d+)?)$/.exec(line.replace(/\s+/g, ''))
-          if (!match) return false
-          const key = match[1]
-          if (!SIX.includes(key)) return false
-          return Math.abs(Number(match[2])) >= THIRD_FROM
-        }),
-      ) === true
-    )
-  }
-
-  /** 吃队列：读、清空、返回增量（两趟共用这一半）。冷却挡下时不许调它。 */
-  function collect() {
-    const deltas = {}
-    readQueue((content) => {
-      for (const raw of content.split(/\r?\n/)) {
-        const line = raw.trim()
-        if (!line || line.startsWith('#')) continue
-        const match = /^([a-z]+)([+-]\d+(?:\.\d+)?)$/.exec(line.replace(/\s+/g, ''))
-        if (!match) {
-          log(`加分文件里这行解析不了，丢了：${line}`)
-          continue
+    // 8. Maybe inject status
+    if (StatusBar.shouldInject(state, now)) {
+      state.lastInjectAt = now;
+      // Inject into all active agents
+      const agents = ctx.get('agents');
+      if (agents) {
+        for (const agent of agents.list()) {
+          try {
+            const sb = statusBars.get(agent.id);
+            if (sb) sb.inject(state);
+          } catch (e) { /* agent may not be ready */ }
         }
-        const key = match[1]
-        const delta = Number(match[2])
-        if (!ALL.includes(key)) {
-          log(`加分文件里没有这个情绪名，丢了：${line}`)
-          continue
+      }
+    }
+  }
+
+  // --- Judge a message and enqueue deltas ---
+  async function handleMessage(agent, message) {
+    if (!state) return;
+
+    // Only process user messages
+    if (message.role !== 'user') return;
+
+    // Skip steer messages injected by ourselves (they start with 【情绪】)
+    const text = typeof message.content === 'string' ? message.content : '';
+    if (!text.trim() || text.startsWith('【情绪】')) return;
+
+    const now = Date.now();
+
+    // Judge (with context if it's ambiguous later)
+    const result = await judge.judge(text, null);
+
+    // Boredom drop: any message → ×0.7
+    const boredomDrop = Boredom.drop(state.boredom, now, 'msg');
+    if (boredomDrop > 0) {
+      await log.append({
+        ts: now, block: '无聊', emotion: '无聊',
+        delta: -Math.round(boredomDrop * 10) / 10,
+        reason: '有人说话了 ×0.7'
+      });
+    }
+
+    // Check if this is likely from the owner (DSH input box, not external bridge)
+    const msgSource = message.source || {};
+    const isOwner = !msgSource.kind || msgSource.kind === 'user' || msgSource.kind === 'composer';
+
+    // Missing drop: only owner
+    if (isOwner) {
+      Missing.drop(state.missing, now);
+    }
+
+    if (!result.emotions || result.emotions.length === 0) return;
+
+    const about = result.about || 'unknown';
+    let needsImmediateSettlement = false;
+    const immediateDeltas = [];
+
+    for (const hisEmotion of result.emotions) {
+      // Convert to her emotion
+      const herResult = await empathy.convert(hisEmotion, about);
+      if (!herResult) continue;
+
+      const herWeights = await empathy.weightsFor(herResult.key);
+      const herCap = await empathy.capFor(herResult.key);
+      const score = herResult.intensity * herCap;
+
+      if (score < 0.15 * herCap) continue;
+
+      // Calculate deltas (without modifying pool)
+      const deltas = MoodPool.calculateWeighted(herWeights, score, herCap);
+      if (deltas.length === 0) continue;
+
+      // Log
+      const herLabel = await empathy.labelFor(herResult.key);
+      for (const d of deltas) {
+        const blockName = MoodLog.blockForBase(d.base);
+        await log.append({
+          ts: now, block: blockName, emotion: `${herLabel} ${herResult.key}`,
+          delta: d.delta,
+          reason: (hisEmotion.evidence || text).slice(0, 70),
+          stateNote: States.formatActive(state.states) || '—'
+        });
+      }
+
+      // Coupling: event propagation
+      for (const d of deltas) {
+        const propagated = Coupling.propagate(state.values, d.base, d.delta);
+        for (const p of propagated) {
+          const pBlock = MoodLog.blockForBase(p.base);
+          await log.append({
+            ts: now, block: pBlock, emotion: '传播',
+            delta: p.delta,
+            reason: `由 ${MoodLog.blockForBase(p.parent)} 传播`,
+            stateNote: '—'
+          });
         }
-        if (key === 'boredom') {
-          log(`无聊不可手动写入，丢了：${line}`)
-          continue
+      }
+
+      // State trigger
+      const stateDef = await empathy.stateFor(herResult.key);
+      if (stateDef) {
+        if (stateDef.when === 'fromUser' && !isOwner) continue;
+        States.activate(state.states, stateDef, now, herResult.key);
+        await log.append({
+          ts: now, block: '状态', emotion: stateDef.name,
+          delta: 0,
+          reason: `触发：${herLabel}`,
+          stateNote: `${stateDef.minutes || 60}min`
+        });
+      }
+
+      // Immediate settlement for strong hits (>20)
+      if (score > 20) {
+        needsImmediateSettlement = true;
+        for (const d of deltas) {
+          immediateDeltas.push(d);
         }
-        if (!Number.isFinite(delta)) continue
-        deltas[key] = (deltas[key] ?? 0) + delta
-      }
-      try {
-        writeFileSync(plusPath, '')
-      } catch (error) {
-        log(`加分文件清空失败（下一跳会重复吃）：${error.message}`)
-      }
-      return true
-    })
-    return deltas
-  }
-
-  // ── 判定与注入 ──────────────────────────────────────────────
-
-  const pairName = (list) => {
-    const keys = [...list].map((item) => item.key).sort((a, b) => INDEX[a] - INDEX[b])
-    return PAIR_NAMES[keys.join('+')] ?? keys.map((key) => CN[key]).join('＋')
-  }
-
-  const detail = (list) => list.map((item) => `${CN[item.key]} ${fmt(item.v)}`).join(' / ')
-
-  const litList = () =>
-    SIX.filter((key) => values[key] > Number(cfg.lightUpAt)).map((key) => ({ key, v: values[key] }))
-
-  function nameFor(list) {
-    if (list.length <= 1) return list.map((item) => CN[item.key]).join('') || '平静'
-    const brightest = [...list].sort((a, b) => b.v - a.v).slice(0, 2)
-    return pairName(brightest)
-  }
-
-  /** 亮起才投；名字和数值，别的都不加。单情亮起时不重复名字（写「悲 45.0」，不写「悲（悲 45.0）」）。 */
-  function moodText() {
-    const lit = litList()
-    if (lit.length === 0) return undefined
-    if (lit.length === 1) return `【情绪】${CN[lit[0].key]} ${fmt(lit[0].v)}`
-    return `【情绪】${nameFor(lit)}（${detail(lit)}）`
-  }
-
-  /** 一句话说清此刻：亮起报名字（最亮两条取名），没亮报「平静」或最高的那一条。 */
-  function describeState() {
-    const lit = litList()
-    if (lit.length > 0) {
-      return { label: nameFor(lit), lit: lit.map((item) => item.key), detail: detail(lit), steady: false }
-    }
-    const sorted = SIX.map((key) => ({ key, v: values[key] })).sort((a, b) => b.v - a.v)
-    const top = sorted[0]
-    const topDetail = `${CN[top.key]} ${fmt(top.v)}`
-    if (top.v < Number(cfg.calmBelow)) return { label: '平静', lit: [], detail: topDetail, steady: true }
-    return { label: CN[top.key], lit: [], detail: topDetail, steady: false }
-  }
-
-  /** 状态一句话，只进日志：亮起就照注入那套说法（单情不重复名字）。 */
-  function stateLine() {
-    const lit = moodText()
-    if (lit) return lit.replace('【情绪】', '')
-    const state = describeState()
-    if (state.steady) return `平静（${state.detail}）`
-    return state.detail
-  }
-
-  const valuesLine = () =>
-    ALL.filter((key) => values[key] > 0)
-      .map((key) => `${CN[key]}${fmt(values[key])}`)
-      .join(' ') || '全零'
-
-  /** 现读 life.json；读不到就重试一次，还读不到返回 undefined（不编、不拿上次的顶上）。 */
-  function readHomeSessionId() {
-    const file = lifeFile
-    if (!file) return undefined
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        const mtime = statSync(file).mtimeMs
-        if (lifeCache.mtime === mtime) return lifeCache.id
-        const parsed = readJson(file)
-        const id = typeof parsed?.homeSessionId === 'string' && parsed.homeSessionId ? parsed.homeSessionId : undefined
-        lifeCache = { mtime, id }
-        return id
-      } catch (error) {
-        if (attempt === 1) log(`life.json 读不动（${error?.message ?? error}），这一跳不投`)
+        // Don't enqueue these — they're applied now
+      } else {
+        // Enqueue for next tick
+        store.enqueue(state, { deltas, ts: now });
       }
     }
-    return undefined
+
+    // Apply immediate settlement (no decay, no tick reset)
+    if (needsImmediateSettlement) {
+      MoodPool.applyDeltas(state.values, immediateDeltas);
+      MoodPool.clamp(state.values);
+    }
+
+    await store.saveState(state);
   }
 
-  const resolveSessionId = () => (cfg.sessionId ? String(cfg.sessionId) : readHomeSessionId())
+  // --- Agent lifecycle ---
+  ctx.on('agent/created', (payload) => {
+    const { agent } = payload;
+    const agentCtx = agent.ctx;
+    if (!agentCtx) return;
 
-  async function say(text) {
-    const sessionId = resolveSessionId()
-    if (!sessionId) return false
-    const agents = ctx.get('agents')
-    let agent = agents?.get?.(sessionId)
-    if (!agent) {
-      // 会话冷着就按实现说明那条路唤一下：sessionController.resolveAgent
-      const resolved = await ctx.get('sessionController')?.resolveAgent?.(sessionId)
-      agent = resolved?.agent
-    }
-    if (!agent) {
-      log(`会话 ${sessionId} 没醒过来，这条没发出去：${text}`)
-      return false
-    }
-    // source.kind 标成自己，这一条才不会被当成「他来说话」去扣思念。
-    // 这个名字刻意留着旧的 'mood-lian'：参数稿和实现说明都按它写的，而且历史里那几条也是它。
-    const message = Object.freeze({
-      role: 'user',
-      content: Object.freeze([{ type: 'text', text }]),
-      source: Object.freeze({ kind: 'mood-lian' }),
-      id: randomUUID(),
-    })
+    // Create status bar for this agent
+    const sb = new StatusBar(agent);
+    statusBars.set(agent.id, sb);
+
+    // Listen for inbox messages on this agent
+    agentCtx.on('agent/inbox/inserted', (p) => {
+      handleMessage(p.agent, p.message).catch(err => {
+        ctx.logger?.warn?.('[dsh-mood] handleMessage error:', err);
+      });
+    });
+
+    // Cleanup on dispose
+    ctx.on('agent/disposed', (p) => {
+      if (p.agent.id === agent.id) {
+        statusBars.delete(agent.id);
+      }
+    });
+  });
+
+  // --- Tick timer ---
+  const tickInterval = ctx.interval(async () => {
     try {
-      await agent.steer(message)
-    } catch (error) {
-      log(`投递被拒：${error?.message ?? error}`)
-      return false
+      await tick(Date.now());
+    } catch (e) {
+      ctx.logger?.warn?.('[dsh-mood] tick error:', e);
     }
-    try {
-      await ctx.get('sessions')?.flush?.(agent.session)
-    } catch {
-      // flush 失败不等于没投出去
+  }, config.tickIntervalMs || 900000);
+
+  // --- Register tools ---
+  let toolDisposers = [];
+  try {
+    toolDisposers = registerTools(ctx, store, baselineRef, () => state);
+  } catch (e) {
+    ctx.logger?.warn?.('[dsh-mood] tool registration error:', e);
+  }
+
+  // --- Register HTTP routes ---
+  try {
+    registerRoutes(ctx, store, () => state);
+  } catch (e) {
+    ctx.logger?.warn?.('[dsh-mood] route registration error:', e);
+  }
+
+  // --- Tools/result → boredom drop ---
+  ctx.on('tools/result', (exec) => {
+    if (!state) return;
+    const now = Date.now();
+    const drop = Boredom.drop(state.boredom, now, 'tool');
+    if (drop > 0) {
+      log.append({
+        ts: now, block: '无聊', emotion: '无聊',
+        delta: -Math.round(drop * 10) / 10,
+        reason: `做了件事（${exec.name}）×0.5`
+      }).catch(() => {});
+      store.saveState(state).catch(() => {});
     }
-    log(`注入（投给 ${sessionId}）：${text}`)
-    return true
-  }
+  });
 
-  /** 六情亮起：带一小时名额。主动那趟传 countsAgainstQuota = false。 */
-  async function injectMood(countsAgainstQuota) {
-    const now = clock()
-    if (countsAgainstQuota && now - lastInjectAt < Number(cfg.injectGapMinutes) * minute) return
-    const text = moodText()
-    if (!text) return
-    if (!(await say(text))) return
-    if (countsAgainstQuota) {
-      lastInjectAt = now
-      saveState()
-    }
-  }
+  // --- Init ---
+  init().then(() => {
+    ctx.logger?.info?.('[dsh-mood] Initialized with worldDir:', worldDir);
+  }).catch(e => {
+    ctx.logger?.warn?.('[dsh-mood] init error:', e);
+  });
 
-  /** 80 之前是敲门：报个数，问她一句；80 起是第三档，换一句更重的话，仍旧只报状态。 */
-  function missingText() {
-    const value = values.missing
-    if (value < MISSING_DIRECT_FROM) return `思念${fmt(value)}，要不要和主人说句话？`
-    return `思念 ${fmt(value)}，好些时候没和主人说话了。`
-  }
-
-  /** 无聊的提醒一律是敲门：报个数，问一句。 */
-  const boredomText = () => `无聊 ${fmt(values.boredom)}，要不要自己做点什么？`
-
-  async function notifyMissing() {
-    const now = clock()
-    if (now - lastNotifyAt.missing < Number(cfg.rollCooldownMinutes) * minute) return
-    const text = missingText()
-    if (!(await say(text))) return
-    lastNotifyAt.missing = now
-    saveState()
-  }
-
-  async function notifyBoredom() {
-    const now = clock()
-    if (now - lastNotifyAt.boredom < Number(cfg.rollCooldownMinutes) * minute) return
-    const text = boredomText()
-    if (!(await say(text))) return
-    lastNotifyAt.boredom = now
-    saveState()
-  }
-
-  // ── 核算：两趟，共用吃增量，不共用衰减 ──────────────────────
-
-  /** 定时那趟：吃增量 → 衰减一次 → 加增量 → 按这一段加钟点分 → 封顶 → 落盘 → 判亮起 → 涨完看表切模式。 */
-  async function tick() {
-    if (ticking || stopped) return
-    ticking = true
-    try {
-      const now = clock()
-      decaySix()
-      const deltas = collect()
-      applyDeltas(deltas)
-      // 这一跳按进来时的模式涨；涨完再看表，切换下一跳的模式
-      const carriedNight = modeNight
-      values.missing += 0.5 * (carriedNight ? Number(cfg.nightMultiplier) : 1)
-      values.boredom += carriedNight ? 0 : boredomPerTick
-      clampAll()
-      lastTickAt = now
-      saveState()
-      log(`定时核算（${carriedNight ? '夜里' : '白天'}）：${valuesLine()}｜${stateLine()}`)
-      switchNight(now)
-      await injectMood(true)
-    } catch (error) {
-      log(`定时核算出错：${error?.message ?? error}`)
-    } finally {
-      ticking = false
-    }
-  }
-
-  /** 主动那趟：吃增量 → 直接加 → 封顶 → 落盘 → 判亮起。一次衰减都不走，也不动 lastTickAt。 */
-  async function active(reason) {
-    if (settling || stopped) return false
-    const now = clock()
-    if (now - lastActiveAt < Number(cfg.activeCooldownMinutes) * minute) {
-      if (now - lastCoolLogAt > 5 * minute) {
-        lastCoolLogAt = now
-        log(`主动核算被冷却挡下（${reason}），队列没动，等下一次定时核算收`)
-      }
-      return false
-    }
-    settling = true
-    try {
-      const deltas = collect()
-      applyDeltas(deltas)
-      clampAll()
-      lastActiveAt = now
-      saveState()
-      log(`主动核算（${reason}）：${valuesLine()}｜${stateLine()}`)
-      await injectMood(false)
-      return true
-    } catch (error) {
-      log(`主动核算出错：${error?.message ?? error}`)
-      return false
-    } finally {
-      settling = false
-    }
-  }
-
-  // ── 思念 / 无聊的掉分 ───────────────────────────────────────
-
-  /** 思念只认「你这边进来的话」：对话框输入或 QQ 桥，两道门共用一个小时一次。
-   *  减到原值的 0.8（不是减固定数）——越是想得厉害，一句话越抹不平；低位也不会一刀砍掉一半。
-   *  本鲸发出去的话不算——宿主自己起的那一轮不算「见到人」，扣下去是假账。 */
-  function dropMissing() {
-    const now = clock()
-    if (now - lastDropAt.missing < 60 * minute) return
-    values.missing = Math.max(0, values.missing * 0.8)
-    lastDropAt.missing = now
-    saveState()
-    log(`思念 ×0.8（你说话了），现在 ${fmt(values.missing)}`)
-  }
-
-  /** 无聊掉分：他说话（A）走 0.7，做事（B）走 0.5。
-   *  同一种事件隔 boredomSameCooldownMinutes（默认 60）才再掉一次；
-   *  两种事件之间隔 boredomCrossCooldownMinutes（默认 30）。
-   *  计时都从上一次「真正掉了分」那一下算，被挡下的事件不刷新时钟。 */
-  function dropBoredom(kind, factor, line) {
-    const now = clock()
-    const sameMs = Math.max(0, Number(cfg.boredomSameCooldownMinutes) || 0) * minute
-    const crossMs = Math.max(0, Number(cfg.boredomCrossCooldownMinutes) || 0) * minute
-    const other = lastDropAt[line === 'talk' ? 'work' : 'talk'] ?? 0
-    if (now - (lastDropAt[line] ?? 0) < sameMs) return
-    if (other > 0 && now - other < crossMs) return
-    const f = Number.isFinite(Number(factor)) ? Number(factor) : Number(cfg.boredomDropFactor)
-    values.boredom = Math.max(0, values.boredom * f)
-    lastDropAt[line] = now
-    saveState()
-    log(`无聊 ×${f}（${kind}），现在 ${fmt(values.boredom)}`)
-  }
-
-  /** 「他来说话」的判据：用户直接输入的，或者 QQ 桥送进来的；自己投的那条不算。 */
-  function fromHim(source) {
-    const kind = source?.kind
-    if (kind === 'user') return true
-    if (typeof kind === 'string' && kind.startsWith('plugin:') && kind.includes('qq-bridge')) return true
-    if (kind === 'plugin' && String(source?.plugin ?? '').includes('qq')) return true
-    return false
-  }
-
-  // ── 骰子 ────────────────────────────────────────────────────
-
-  /** 记上一轮骰子的结果，给面板看：hit / miss。掷中就顺手记下「上次掷中」的时刻。 */
-  function recordRoll(line, result) {
-    const at = clock()
-    lastRoll[line] = { at, result }
-    if (result === 'hit') lastHitAt[line] = at
-    saveState()
-  }
-
-  async function rollMissing() {
-    if (stopped || modeNight) return
-    const value = values.missing
-    if (value < MISSING_ROLL_FROM) {
-      recordRoll('missing', 'miss')
-      return
-    }
-    if (value >= MISSING_DIRECT_FROM) {
-      recordRoll('missing', 'hit')
-      await notifyMissing()
-      return
-    }
-    const hit = Math.random() < rollChance(value)
-    recordRoll('missing', hit ? 'hit' : 'miss')
-    if (hit) await notifyMissing()
-  }
-
-  async function rollBoredom() {
-    if (stopped || modeNight) return
-    const value = values.boredom
-    if (value < Number(cfg.boredomRollFrom)) {
-      recordRoll('boredom', 'miss')
-      return
-    }
-    if (value >= Number(cfg.boredomDirectFrom)) {
-      recordRoll('boredom', 'hit')
-      await notifyBoredom()
-      return
-    }
-    const hit = Math.random() < rollChance(value)
-    recordRoll('boredom', hit ? 'hit' : 'miss')
-    if (hit) await notifyBoredom()
-  }
-
-  // ── 开机 ────────────────────────────────────────────────────
-
-  loadState()
-  const bootAt = clock()
-  lastTickAt = bootAt // 只认开机时间：关机那段整段冻住，不补算
-  modeNight = nightNow(bootAt) // 开机按当时的钟点认一段，不补跨段
-  saveState()
-  log(`起来了（${modeNight ? '夜里' : '白天'}）：${valuesLine()}`)
-  log(`路径：数据 ${dataDir}｜房间 ${roomDir || '（没配 worldId，加分和三只文件都不接）'}｜会话 ${lifeFile || '—'}`)
-
-  const disposers = []
-
-  // 浏览器那半边的取数口：输入框下面那枚药丸每 15 秒来读一次。
-  // 插件可能比 webServer 先 apply，所以挂不上就等一会儿再挂，别默默跳过。
-  const ROUTE_PATH = '/api/dsh-mood-changes/state'
-  let routeDisposer
-  function attachRoute() {
-    if (routeDisposer || stopped) return true
-    const webServer = ctx.get('webServer')
-    if (!webServer?.register) return false
-    routeDisposer = webServer.register({
-      kind: 'exact',
-      path: ROUTE_PATH,
-      handler: (req, res) => {
-        const now = clock()
-        const state = describeState()
-        const body = JSON.stringify({
-          at: now,
-          label: state.label,
-          lit: state.lit,
-          steady: state.steady,
-          values: Object.fromEntries(ALL.map((key) => [key, round(values[key])])),
-          lastTickAt,
-          lastHitAt: { ...lastHitAt },
-          night: modeNight,
-          lastRoll: {
-            missing: { ...lastRoll.missing },
-            boredom: { ...lastRoll.boredom },
-          },
-        })
-        res.writeHead(200, {
-          'content-type': 'application/json; charset=utf-8',
-          'cache-control': 'no-store',
-        })
-        res.end(body)
-      },
-    })
-    log(`状态接口挂上了：${ROUTE_PATH}`)
-    return true
-  }
-
-  if (!attachRoute()) {
-    let attempts = 0
-    const retry = () => {
-      if (stopped || attachRoute()) return
-      attempts += 1
-      if (attempts > 120) {
-        log(`webServer 一直没来，状态接口没挂上：${ROUTE_PATH}`)
-        return
-      }
-      if (attempts === 6) log('webServer 还没起来，状态接口等着')
-      ctx.timeout(retry, 5000)
-    }
-    ctx.timeout(retry, 1000)
-  }
-
-  disposers.push(() => {
-    try {
-      routeDisposer?.()
-    } catch {
-      // 收尾失败不吵人
-    }
-  })
-
-  disposers.push(
-    ctx.effect(() =>
-      ctx.interval(() => {
-        void tick()
-      }, sweepMs),
-    ),
-  )
-
-  disposers.push(
-    ctx.effect(() =>
-      ctx.interval(() => {
-        if (stopped || !roomDir) return
-        try {
-          if (existsSync(settlePath)) {
-            rmSync(settlePath, { force: true })
-            void active('触发')
-            return
-          }
-          if (hasThirdTier()) {
-            void active('触发')
-            return
-          }
-          if (existsSync(actPath)) {
-            rmSync(actPath, { force: true })
-            dropBoredom('自己做事', cfg.boredomDropFactor, 'work')
-          }
-        } catch (error) {
-          log(`扫描出错：${error?.message ?? error}`)
-        }
-      }, pollMs),
-    ),
-  )
-
-  disposers.push(
-    ctx.effect(() =>
-      ctx.interval(() => {
-        if (stopped) return
-        void rollMissing()
-        // 思念掷完隔一分钟再掷无聊；思念没到门槛，这一分钟也照样留（参数稿七之二）
-        ctx.timeout(() => void rollBoredom(), minute)
-      }, rollMs),
-    ),
-  )
-
-  disposers.push(
-    ctx.on('session/event', (session, event) => {
-      if (stopped) return
-      try {
-        const sessionId = resolveSessionId()
-        if (!sessionId || session?.id !== sessionId) return
-        // 思念：只认对话框和 QQ 桥进来的话，共用一小时一次；本鲸发出去的话不扣。
-        if (event?.type === 'user/message' && fromHim(event.data?.source)) {
-          dropMissing()
-          dropBoredom('你说话了', cfg.boredomTalkDropFactor, 'talk')
-          return
-        }
-        // 无聊：她真的动过手就算一次，不管这一轮是谁起的；
-        // 只有生活线那几样簿记不算「做事」（plan_next / check_alarm / cancel_alarm）。
-        if (event?.type === 'tool/call') {
-          const name = String(event.data?.name ?? '')
-          if (!NON_WORK_TOOLS.has(name)) dropBoredom(`做了点事（${name || '工具'}）`, cfg.boredomDropFactor, 'work')
-        }
-      } catch (error) {
-        log(`看会话事件出错：${error?.message ?? error}`)
-      }
-    }),
-  )
-
-  ctx.effect(() => () => {
-    stopped = true
-    for (const dispose of disposers.splice(0).reverse()) {
-      try {
-        dispose()
-      } catch {
-        // 收尾失败不吵人
-      }
-    }
-    log('收工')
-  })
+  // --- Cleanup ---
+  return () => {
+    tickInterval();
+    for (const d of toolDisposers) d();
+  };
 }
-
-export const name = 'dsh-mood-changes'

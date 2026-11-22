@@ -1,389 +1,264 @@
-/**
- * dsh-mood-changes（Mood changes）的浏览器那一半。
- *
- * 输入框下面一枚小药丸，写着此刻的状态；按一下，往上弹一张卡：
- * 乐 / 悲 / 惧 / 怒 / 惊 / 厌，隔一条缝，思念 / 无聊。只报状态，不替人开口。
- */
 window.__ModuleLoader__.load({
-  id: 'dsh-mood-changes',
+  id: 'dsh-mood',
   factory(require) {
-    const React = require('react')
-    const h = React.createElement
-    const NS = 'dsh-mood-changes'
-    const STATE_URL = '/api/dsh-mood-changes/state'
-    const POLL_MS = 15000
-    const SIX = ['happy', 'sad', 'fear', 'anger', 'surprise', 'disgust']
-    const EXTRA = ['missing', 'boredom']
-    const FALLBACK = {
-      title: '此刻',
-      eyebrow: 'Mood changes',
-      steady: '平静',
-      waiting: '还没算过',
-      dot: ' · ',
-      colon: '：',
-      listSeparator: '、',
-      minute: '分钟',
-      ago: '前',
-      justNow: '刚刚',
-      hit: '掷中',
-      missed: '未掷中',
-      notRolled: '还没掷过',
-      nightPaused: '夜里停掷',
-      happy: '开心',
-      sad: '悲伤',
-      fear: '害怕',
-      anger: '生气',
-      surprise: '惊讶',
-      disgust: '厌恶',
-      missing: '思念',
-      boredom: '无聊',
-    }
-    const EN = {
-      title: 'Now',
-      eyebrow: 'Mood changes',
-      steady: 'Steady',
-      waiting: 'Not computed yet',
-      dot: ' · ',
-      colon: ': ',
-      listSeparator: ', ',
-      minute: ' min',
-      ago: ' ago',
-      justNow: 'just now',
-      hit: 'hit',
-      missed: 'missed',
-      notRolled: 'not rolled yet',
-      nightPaused: 'paused at night',
-      happy: 'Joy',
-      sad: 'Sorrow',
-      fear: 'Fear',
-      anger: 'Anger',
-      surprise: 'Surprise',
-      disgust: 'Disgust',
-      missing: 'Longing',
-      boredom: 'Boredom',
-    }
-    const COLORS = {
-      happy: '#f0c05a',
-      sad: '#6c8ebf',
-      fear: '#a184e0',
-      anger: '#e0605c',
-      surprise: '#48c9c0',
-      disgust: '#93a94e',
-      missing: '#e08ab5',
-      boredom: '#8b909a',
-    }
+    const React = require('react');
+    const { useState, useEffect, useCallback, useRef } = React;
+    const h = React.createElement;
 
-    /** 两个半块（药丸、弹卡）共用的最小状态：轮询来的数据 + 开合 + 锚点。 */
-    const shared = { data: null, open: false, rect: null, listeners: new Set() }
-    const emit = () => {
-      for (const listener of Array.from(shared.listeners)) listener()
-    }
-    const useShared = () => {
-      const [, bump] = React.useState(0)
-      React.useEffect(() => {
-        const listener = () => bump((n) => n + 1)
-        shared.listeners.add(listener)
-        return () => {
-          shared.listeners.delete(listener)
-        }
-      }, [])
-      return shared
-    }
+    const BASE_COLORS = {
+      happy: '#f59e0b',
+      sad: '#3b82f6',
+      anger: '#ef4444',
+      fear: '#8b5cf6',
+      surprise: '#10b981',
+      disgust: '#84cc16',
+    };
+    const BASE_LABELS = {
+      happy: '乐', sad: '悲', anger: '怒', fear: '惧', surprise: '惊', disgust: '厌',
+    };
+    const BASE_ORDER = ['happy', 'sad', 'anger', 'fear', 'surprise', 'disgust'];
 
-    const round1 = (value) => {
-      const n = Number(value)
-      return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0
-    }
+    // Pill component
+    function MoodPill({ state, onClick }) {
+      if (!state) return null;
+      const dom = state.dominant;
+      const label = dom?.label || '...';
+      const bg = dom?.base && BASE_COLORS[dom.base] ? BASE_COLORS[dom.base] : '#6b7280';
+      const activeStates = (state.states || []).filter(s => s.until > Date.now());
+      const hasState = activeStates.length > 0;
 
-    function bar(value, color) {
-      return h(
-        'div',
-        {
-          style: {
-            position: 'relative',
-            height: 5,
-            borderRadius: 3,
-            background: 'rgba(255,255,255,0.07)',
-            overflow: 'hidden',
-            flex: 1,
-            minWidth: 0,
-          },
+      return h('button', {
+        onClick,
+        style: {
+          display: 'inline-flex', alignItems: 'center', gap: 4,
+          padding: '2px 8px', borderRadius: 12, border: `1.5px solid ${bg}`,
+          background: 'transparent', cursor: 'pointer',
+          fontSize: 12, lineHeight: '20px', color: 'var(--dsw-alias-text-primary, #d1d5db)',
+          fontFamily: 'inherit',
         },
+        title: hasState ? activeStates.map(s => s.name).join('、') : '',
+      },
+        h('span', {
+          style: {
+            width: 16, height: 16, borderRadius: '50%',
+            background: bg, display: 'inline-block', flexShrink: 0,
+          }
+        }),
+        label,
+        hasState ? h('span', { style: { opacity: 0.7, fontSize: 10 } }, activeStates.map(s => s.name).join(' ')) : null,
+      );
+    }
+
+    // Bar component
+    function EmotionBar({ base, value, baseline }) {
+      const pct = Math.min(100, Math.max(0, (value / 100) * 100));
+      const blPct = baseline ? Math.min(100, Math.max(0, (baseline / 100) * 100)) : 0;
+      const color = BASE_COLORS[base] || '#6b7280';
+
+      return h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 } },
+        h('span', { style: { width: 16, fontSize: 12, textAlign: 'right', color: 'var(--dsw-alias-text-secondary, #9ca3af)' } }, BASE_LABELS[base]),
+        h('div', { style: { flex: 1, height: 14, background: 'var(--dsw-alias-bg-tertiary, #374151)', borderRadius: 4, position: 'relative', overflow: 'hidden' } },
+          h('div', {
+            style: {
+              width: pct + '%', height: '100%', background: color, borderRadius: 4,
+              transition: 'width 0.3s ease',
+            }
+          }),
+          baseline !== undefined ? h('div', {
+            style: {
+              position: 'absolute', left: blPct + '%', top: 0, bottom: 0,
+              width: 2, background: 'var(--dsw-alias-text-primary, #fff)', opacity: 0.5,
+            }
+          }) : null,
+        ),
+        h('span', { style: { width: 36, fontSize: 11, textAlign: 'right', color: 'var(--dsw-alias-text-secondary, #9ca3af)', fontVariantNumeric: 'tabular-nums' } }, value.toFixed(1)),
+      );
+    }
+
+    // Card (modal)
+    function MoodCard({ state, onClose }) {
+      const [view, setView] = useState('bars'); // 'bars' | 'log'
+      const [logDate, setLogDate] = useState('');
+      const [logEntries, setLogEntries] = useState([]);
+      const [logBlock, setLogBlock] = useState('');
+
+      useEffect(() => {
+        const today = new Date().toISOString().slice(0, 10);
+        setLogDate(today);
+      }, []);
+
+      const fetchLog = useCallback(async (date, block) => {
+        try {
+          const params = new URLSearchParams({ date });
+          if (block) params.set('block', block);
+          const resp = await fetch('/api/mood/log?' + params.toString());
+          const data = await resp.json();
+          setLogEntries(data.entries || []);
+        } catch (e) {
+          setLogEntries([]);
+        }
+      }, []);
+
+      useEffect(() => {
+        if (view === 'log' && logDate) {
+          fetchLog(logDate, logBlock);
+        }
+      }, [view, logDate, logBlock, fetchLog]);
+
+      if (!state) return null;
+
+      const activeStates = (state.states || []).filter(s => s.until > Date.now());
+      const BLOCK_OPTIONS = ['', '乐', '悲', '怒', '惧', '惊', '厌', '思念', '无聊', '状态'];
+
+      return h('div', {
+        style: {
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }
+      },
+        h('div', {
+          onClick: onClose,
+          style: { position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)' }
+        }),
         h('div', {
           style: {
-            position: 'absolute',
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: `${Math.max(0, Math.min(100, value))}%`,
-            background: color,
-            borderRadius: 3,
-            opacity: 0.92,
-          },
-        }),
-      )
-    }
-
-    function row(key, values, t) {
-      const value = round1(values[key])
-      return h(
-        'div',
-        {
-          key,
-          style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 7 },
-        },
-        h(
-          'span',
-          {
-            style: {
-              width: 34,
-              flex: 'none',
-              fontSize: 12,
-              color: COLORS[key],
-              opacity: value > 0 ? 0.95 : 0.4,
-            },
-          },
-          t(key),
-        ),
-        bar(value, COLORS[key]),
-        h(
-          'span',
-          {
-            style: {
-              width: 34,
-              flex: 'none',
-              textAlign: 'right',
-              fontSize: 11,
-              color: 'rgba(255,255,255,0.5)',
-              fontVariantNumeric: 'tabular-nums',
-            },
-          },
-          String(Math.round(value)),
-        ),
-      )
-    }
-
-    function MoodPill(props) {
-      const state = useShared()
-      const t = typeof props.t === 'function' ? props.t : (key) => FALLBACK[key] ?? key
-      const data = state.data
-      const lit = Array.isArray(data?.lit) ? data.lit.length > 0 : false
-      const label = data ? data.label : t('waiting')
-      const dotColor = lit ? '#f0c05a' : 'rgba(255,255,255,0.35)'
-      const ref = React.useRef(null)
-      const toggle = () => {
-        const element = ref.current
-        if (element && typeof element.getBoundingClientRect === 'function') {
-          const box = element.getBoundingClientRect()
-          shared.rect = { top: box.top, left: box.left, width: box.width }
-        }
-        shared.open = !shared.open
-        emit()
-      }
-      return h(
-        'div',
-        { style: { display: 'flex', justifyContent: 'center', padding: '2px 0 4px' } },
-        h(
-          'button',
-          {
-            ref,
-            type: 'button',
-            'data-mood-changes-pill': 'true',
-            'aria-expanded': state.open ? 'true' : 'false',
-            title: data ? `${data.label} · ${t('title')}` : t('waiting'),
-            onClick: toggle,
-            style: {
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '3px 10px',
-              borderRadius: 999,
-              border: '1px solid rgba(255,255,255,0.10)',
-              background: state.open ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.05)',
-              color: 'inherit',
-              fontSize: 12,
-              lineHeight: '16px',
-              cursor: 'pointer',
-              transition: 'background 120ms ease',
-            },
-          },
-          h('span', {
-            style: { width: 6, height: 6, borderRadius: 3, background: dotColor, display: 'inline-block' },
-          }),
-          h('span', null, label),
-        ),
-      )
-    }
-
-    function MoodPanel(props) {
-      const state = useShared()
-      const t = typeof props.t === 'function' ? props.t : (key) => FALLBACK[key] ?? key
-      React.useEffect(() => {
-        if (!state.open) return undefined
-        const onKey = (event) => {
-          if (event.key === 'Escape') {
-            shared.open = false
-            emit()
+            position: 'relative', width: 360, maxHeight: '80vh',
+            background: 'var(--dsw-alias-bg-primary, #1f2937)',
+            borderRadius: 12, padding: 20, overflowY: 'auto',
+            color: 'var(--dsw-alias-text-primary, #d1d5db)',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
           }
-        }
-        const onDown = (event) => {
-          const target = event.target
-          if (target && typeof target.closest === 'function') {
-            if (target.closest('[data-mood-changes-panel]') || target.closest('[data-mood-changes-pill]')) return
-          }
-          shared.open = false
-          emit()
-        }
-        document.addEventListener('keydown', onKey)
-        document.addEventListener('mousedown', onDown)
-        return () => {
-          document.removeEventListener('keydown', onKey)
-          document.removeEventListener('mousedown', onDown)
-        }
-      }, [state.open])
-
-      if (!state.open || !state.data) return null
-      const data = state.data
-      const values = data.values || {}
-      const lit = Array.isArray(data.lit) ? data.lit : []
-      const width = 420
-      const rect = shared.rect
-      const viewportWidth = typeof window === 'undefined' ? 1200 : window.innerWidth
-      const viewportHeight = typeof window === 'undefined' ? 900 : window.innerHeight
-      const left = rect ? Math.max(8, Math.min(rect.left, viewportWidth - width - 8)) : 8
-      const bottom = rect ? Math.max(8, viewportHeight - rect.top + 10) : 80
-      const elapsedText = (ms) => {
-        const value = Number(ms)
-        if (!Number.isFinite(value) || value <= 0) return '—'
-        const minutes = Math.floor(Math.max(0, Date.now() - value) / 60000)
-        return minutes < 1 ? t('justNow') : `${minutes}${t('minute')}${t('ago')}`
-      }
-      const litNames = lit.length > 0 ? lit.map((key) => t(key)).join(t('listSeparator')) : t('steady')
-      const sub = `${elapsedText(data.lastTickAt)}${t('dot')}${litNames}`
-      const rollText = (line) => {
-        if (data.night) return t('nightPaused')
-        const result = data.lastRoll?.[line]?.result
-        if (result === 'hit') return t('hit')
-        if (result === 'miss') return t('missed')
-        return t('notRolled')
-      }
-      const feet = [
-        `${t('missing')}${t('colon')}${rollText('missing')}${t('dot')}${elapsedText(data.lastHitAt?.missing)}`,
-        `${t('boredom')}${t('colon')}${rollText('boredom')}${t('dot')}${elapsedText(data.lastHitAt?.boredom)}`,
-      ]
-      return h(
-        'div',
-        {
-          'data-mood-changes-panel': 'true',
-          role: 'dialog',
-          'aria-label': `${t('eyebrow')} · ${t('title')}`,
-          style: {
-            position: 'fixed',
-            left,
-            bottom,
-            width,
-            zIndex: 60,
-            boxSizing: 'border-box',
-            padding: '16px 20px 14px',
-            borderRadius: 14,
-            border: '1px solid rgba(255,255,255,0.07)',
-            background: 'rgba(13,20,32,0.97)',
-            boxShadow: '0 18px 44px rgba(0,0,0,0.5)',
-            color: 'rgba(255,255,255,0.9)',
-            backdropFilter: 'blur(6px)',
-          },
         },
-        h(
-          'div',
-          { style: { fontSize: 11, letterSpacing: 1, color: 'rgba(255,255,255,0.42)' } },
-          `${t('eyebrow')} · ${t('title')}`,
-        ),
-        h(
-          'div',
-          {
-            style: {
-              marginTop: 6,
-              fontSize: 22,
-              fontWeight: 600,
-              lineHeight: 1.35,
-              color: lit.length > 0 ? '#f0c05a' : 'rgba(255,255,255,0.55)',
-            },
-          },
-          data.label,
-        ),
-        h('div', { style: { marginTop: 6, marginBottom: 14, fontSize: 11, color: 'rgba(255,255,255,0.38)' } }, sub),
-        SIX.map((key) => row(key, values, t)),
-        h('div', { style: { height: 10 } }),
-        EXTRA.map((key) => row(key, values, t)),
-        h(
-          'div',
-          {
-            style: {
-              marginTop: 8,
-              paddingTop: 10,
-              borderTop: '1px solid rgba(255,255,255,0.06)',
-              fontSize: 10.5,
-              color: 'rgba(255,255,255,0.36)',
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: '4px 18px',
-            },
-          },
-          feet.map((text, index) => h('span', { key: index }, text)),
-        ),
-      )
+          // Header
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } },
+            h('span', { style: { fontWeight: 600, fontSize: 16 } }, view === 'bars' ? '情绪面板' : '情绪日志'),
+            h('div', { style: { display: 'flex', gap: 8 } },
+              view === 'bars' ? h('button', {
+                onClick: () => setView('log'),
+                style: { background: 'none', border: '1px solid var(--dsw-alias-border, #4b5563)', borderRadius: 6, color: 'var(--dsw-alias-text-primary, #d1d5db)', padding: '2px 10px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }
+              }, '查看日志') : h('button', {
+                onClick: () => setView('bars'),
+                style: { background: 'none', border: '1px solid var(--dsw-alias-border, #4b5563)', borderRadius: 6, color: 'var(--dsw-alias-text-primary, #d1d5db)', padding: '2px 10px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }
+              }, '← 返回'),
+              h('button', {
+                onClick: onClose,
+                style: { background: 'none', border: 'none', color: 'var(--dsw-alias-text-secondary, #9ca3af)', fontSize: 18, cursor: 'pointer', lineHeight: 1, fontFamily: 'inherit' }
+              }, '×'),
+            ),
+          ),
+
+          view === 'bars' ?
+            // Bars view
+            h('div', null,
+              h('div', { style: { marginBottom: 12 } },
+                ...BASE_ORDER.map(base =>
+                  h(EmotionBar, { key: base, base, value: state.values[base] || 0, baseline: undefined })
+                )
+              ),
+              state.missing ? h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginBottom: 4 } },
+                `思念：${(state.missing.value || 0).toFixed(1)}`
+              ) : null,
+              state.boredom ? h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginBottom: 8 } },
+                `无聊：${(state.boredom.value || 0).toFixed(1)}`
+              ) : null,
+              activeStates.length > 0 ? h('div', { style: { borderTop: '1px solid var(--dsw-alias-border, #4b5563)', paddingTop: 8 } },
+                h('div', { style: { fontSize: 12, fontWeight: 600, marginBottom: 4 } }, '激活状态'),
+                ...activeStates.map(s =>
+                  h('div', { key: s.name, style: { fontSize: 12, color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginBottom: 2 } },
+                    `${s.name}（触发：${s.from}，剩余 ${Math.max(0, Math.ceil((s.until - Date.now()) / 60000))}min）`
+                  )
+                )
+              ) : null,
+            )
+          :
+            // Log view
+            h('div', null,
+              h('div', { style: { display: 'flex', gap: 8, marginBottom: 12 } },
+                h('input', {
+                  type: 'date', value: logDate,
+                  onChange: e => setLogDate(e.target.value),
+                  style: { background: 'var(--dsw-alias-bg-secondary, #374151)', color: 'var(--dsw-alias-text-primary, #d1d5db)', border: '1px solid var(--dsw-alias-border, #4b5563)', borderRadius: 6, padding: '4px 8px', fontSize: 12, fontFamily: 'inherit' }
+                }),
+                h('select', {
+                  value: logBlock,
+                  onChange: e => setLogBlock(e.target.value),
+                  style: { background: 'var(--dsw-alias-bg-secondary, #374151)', color: 'var(--dsw-alias-text-primary, #d1d5db)', border: '1px solid var(--dsw-alias-border, #4b5563)', borderRadius: 6, padding: '4px 8px', fontSize: 12, fontFamily: 'inherit' }
+                },
+                  ...BLOCK_OPTIONS.map(b =>
+                    h('option', { key: b, value: b }, b || '全部')
+                  )
+                ),
+              ),
+              h('div', { style: { maxHeight: 400, overflowY: 'auto', fontSize: 11 } },
+                logEntries.length === 0 ?
+                  h('div', { style: { color: 'var(--dsw-alias-text-secondary, #9ca3af)', textAlign: 'center', padding: 20 } }, '暂无记录')
+                :
+                  h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+                    h('thead', null,
+                      h('tr', null,
+                        h('th', { style: textCellStyle }, '时间'),
+                        h('th', { style: textCellStyle }, '情绪'),
+                        h('th', { style: textCellStyle }, '变化'),
+                        h('th', { style: textCellStyle }, '原因'),
+                      )
+                    ),
+                    h('tbody', null,
+                      ...logEntries.map((e, i) =>
+                        h('tr', { key: i, style: { borderTop: '1px solid var(--dsw-alias-border, #374151)' } },
+                          h('td', { style: textCellStyle }, e.time),
+                          h('td', { style: textCellStyle }, e.emotion),
+                          h('td', { style: { ...textCellStyle, fontVariantNumeric: 'tabular-nums' } }, e.delta),
+                          h('td', { style: { ...textCellStyle, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, e.reason),
+                        )
+                      )
+                    )
+                  )
+              ),
+            )
+        )
+      );
+    }
+
+    const textCellStyle = {
+      padding: '3px 6px', textAlign: 'left', fontSize: 11,
+      color: 'var(--dsw-alias-text-primary, #d1d5db)',
+      borderBottom: '1px solid var(--dsw-alias-border, #374151)',
+    };
+
+    // Main component
+    function MoodWidget() {
+      const [moodState, setMoodState] = useState(null);
+      const [showCard, setShowCard] = useState(false);
+      const timerRef = useRef(null);
+
+      const fetchState = useCallback(async () => {
+        try {
+          const resp = await fetch('/api/mood/state');
+          if (!resp.ok) return;
+          const data = await resp.json();
+          setMoodState(data);
+        } catch (e) { /* server may not be ready */ }
+      }, []);
+
+      useEffect(() => {
+        fetchState();
+        timerRef.current = setInterval(fetchState, 30000);
+        return () => { if (timerRef.current) clearInterval(timerRef.current); };
+      }, [fetchState]);
+
+      return h('div', { style: { display: 'inline-flex', alignItems: 'center' } },
+        h(MoodPill, { state: moodState, onClick: () => setShowCard(true) }),
+        showCard ? h(MoodCard, { state: moodState, onClose: () => setShowCard(false) }) : null,
+      );
     }
 
     return {
-      inject: ['slots', 'locale'],
+      inject: ['slots'],
       apply(ctx) {
-        ctx.effect(() => ctx.locale.register(NS, { zh: FALLBACK, en: EN }), 'dsh-mood-changes: dictionaries')
-        ctx.effect(() => {
-          const load = () => {
-            fetch(STATE_URL, { cache: 'no-store' })
-              .then((res) => (res.ok ? res.json() : null))
-              .then((next) => {
-                if (next && next.values) {
-                  shared.data = next
-                  emit()
-                }
-              })
-              .catch(() => {})
-          }
-          load()
-          const timer = setInterval(load, POLL_MS)
-          const wake = () => load()
-          window.addEventListener('focus', wake)
-          document.addEventListener('visibilitychange', wake)
-          return () => {
-            clearInterval(timer)
-            window.removeEventListener('focus', wake)
-            document.removeEventListener('visibilitychange', wake)
-          }
-        }, 'dsh-mood-changes: poll')
-        ctx.slots.inject('conversation.composer.dock', () =>
-          ctx.slots.register(
-            {
-              name: 'conversation.composer.dock',
-              id: 'dsh-mood-changes-pill',
-              order: 30,
-              locale: NS,
-            },
-            MoodPill,
-          ),
-        )
-        ctx.slots.inject('shell.overlay', () =>
-          ctx.slots.register(
-            {
-              name: 'shell.overlay',
-              id: 'dsh-mood-changes-panel',
-              order: 60,
-              locale: NS,
-            },
-            MoodPanel,
-          ),
-        )
+        ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
+          name: 'conversation.composer.dock', id: 'dsh-mood-pill', order: 20,
+        }, MoodWidget));
       },
-    }
+    };
   },
-})
+});

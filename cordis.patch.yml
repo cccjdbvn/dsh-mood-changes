@@ -1,9 +1,11 @@
-# Mood changes（dsh-mood-changes）：情绪状态插件
-# 参数一个都不许自己发挥，照作者那份参数稿走；这里只留默认值。
-# 什么都不配 = 状态存在 <DSH_HOME>/mood，不接世界：只显示状态、不往会话里注入。
-# 接了世界就加一个 worldId（比如 worldId: lian），房间和 life.json 自动推到
-#   <DSH_HOME>/worlds/<worldId>/room 和 <DSH_HOME>/worlds/<worldId>/life.json
 - insert:
-    - id: dsh-mood-changes
-      name: dsh-mood-changes
-      config: {}
+    - id: dsh-mood
+      name: 'dsh-mood'
+      config:
+        judgeBaseUrl: 'http://127.0.0.1:1234/v1'
+        judgeApiKey: ''
+        judgeModel: 'local-model'
+        judgeTimeout: 3000
+        judgeTemperature: 0.3
+        tickIntervalMs: 900000
+        worldDir: ''
