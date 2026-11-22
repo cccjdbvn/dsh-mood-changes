@@ -40,10 +40,11 @@ export function apply(ctx, config) {
 
   // Mutable state (loaded from disk on start)
   let state = null;
-  let baseline = { happy: 15, sad: 5, fear: 5, anger: 0, surprise: 0, disgust: 5 };
 
-  // Ref for tools to access current baseline
-  const baselineRef = { current: baseline };
+  // Single source of truth for the baseline: the mood_baseline tool writes
+  // into this ref, and tick() reads from it (KNOWN-ISSUES A3 — previously
+  // tick used a stale closure copy and tool edits never took effect).
+  const baselineRef = { current: { happy: 15, sad: 5, fear: 5, anger: 0, surprise: 0, disgust: 5 } };
 
   // Per-agent status bar instances
   const statusBars = new Map();
@@ -68,10 +69,43 @@ export function apply(ctx, config) {
   // --- Initialization ---
   async function init() {
     state = await store.loadState();
-    baseline = await store.loadBaseline();
-    baselineRef.current = { ...baseline };
+    baselineRef.current = await store.loadBaseline();
     // Ensure queue exists
     if (!state.queue) state.queue = [];
+  }
+
+  /**
+   * Settlement: apply queued deltas to the pool, then run event propagation
+   * for exactly these entries (KNOWN-ISSUES A6 — propagation now happens at
+   * settlement time, together with the main entries, and is also multiplied
+   * by the active state modifiers per A5). Shared by tick() and by the
+   * immediate settlement path. Does NOT decay and does NOT touch lastTickAt.
+   */
+  function settleEntries(entries, now) {
+    if (!entries || entries.length === 0) return;
+    const mods = States.compositeMod(state.states);
+    const propLog = [];
+
+    for (const entry of entries) {
+      for (const d of entry.deltas || []) {
+        MoodPool.apply(state.values, d.base, d.delta, d.cap);
+      }
+      for (const d of entry.deltas || []) {
+        const propagated = Coupling.propagate(state.values, d.base, d.delta, mods);
+        for (const p of propagated) {
+          propLog.push({
+            ts: now, block: MoodLog.blockForBase(p.base),
+            emotion: '传播',
+            delta: p.delta,
+            reason: `由 ${MoodLog.blockForBase(p.parent)} 传播`,
+            stateNote: '—'
+          });
+        }
+      }
+    }
+
+    MoodPool.clamp(state.values);
+    if (propLog.length) fireAndForget(log.appendBatch(propLog));
   }
 
   // --- Tick ---
@@ -81,23 +115,12 @@ export function apply(ctx, config) {
     const dtMs = now - (state.lastTickAt || now);
     if (dtMs < 60000) return; // Minimum 1 minute between ticks
 
-    // 1. Decay
-    state.values = MoodPool.decay(state.values, baseline, dtMs);
+    // 1. Decay toward the CURRENT baseline (A3)
+    state.values = MoodPool.decay(state.values, baselineRef.current, dtMs);
 
-    // 2. Apply event queue
-    const queue = store.drainQueue(state);
-    for (const entry of queue) {
-      const deltas = entry.deltas || [];
-      for (const d of deltas) {
-        // Apply state modifiers to the delta
-        const mods = States.compositeMod(state.states);
-        let factor = 1;
-        if (d.base && mods[d.base]) factor = mods[d.base];
-        const adjustedDelta = d.delta * factor;
-
-        MoodPool.apply(state.values, d.base, adjustedDelta, d.cap || 25);
-      }
-    }
+    // 2. Settle the event queue (apply + propagate; modifiers were applied
+    //    at judge time on the queued deltas, so no re-multiplication here)
+    settleEntries(store.drainQueue(state), now);
 
     // 3. Coupling: tick damping
     Coupling.dampen(state.values, 0); // Start at 0, increase after a week
@@ -114,7 +137,7 @@ export function apply(ctx, config) {
     if (missingResult.crossedThreshold) {
       fireAndForget(log.append({
         ts: now, block: '思念', emotion: '思念',
-        delta: missingResult.delta,
+        delta: Math.round(missingResult.delta * 10) / 10,
         reason: `跨档：→ ${missingResult.thresholdLabel}`,
         stateNote: States.formatActive(state.states) || '—'
       }));
@@ -135,7 +158,6 @@ export function apply(ctx, config) {
     // 8. Maybe inject status
     if (StatusBar.shouldInject(state, now)) {
       state.lastInjectAt = now;
-      // Inject into all active agents
       const agents = ctx.get('agents');
       if (agents) {
         for (const agent of agents.list()) {
@@ -148,7 +170,7 @@ export function apply(ctx, config) {
     }
   }
 
-  // --- Judge a message and enqueue deltas ---
+  // --- Judge a message, enqueue deltas, settle on strong triggers ---
   async function handleMessage(agent, message) {
     if (!state) return;
 
@@ -156,6 +178,8 @@ export function apply(ctx, config) {
     if (message.role !== 'user') return;
 
     // Skip steer messages injected by ourselves (they start with 【情绪】)
+    // NOTE (KNOWN-ISSUES B2): prefix matching is fragile; switch to a source
+    // marker once the injected message shape is verified at runtime.
     const text = typeof message.content === 'string' ? message.content : '';
     if (!text.trim() || text.startsWith('【情绪】')) return;
 
@@ -164,14 +188,16 @@ export function apply(ctx, config) {
     // Judge (with context if it's ambiguous later)
     const result = await judge.judge(text, null);
 
+    const logBatch = [];
+
     // Boredom drop: any message → ×0.7
     const boredomDrop = Boredom.drop(state.boredom, now, 'msg');
     if (boredomDrop > 0) {
-      fireAndForget(log.append({
+      logBatch.push({
         ts: now, block: '无聊', emotion: '无聊',
         delta: -Math.round(boredomDrop * 10) / 10,
         reason: '有人说话了 ×0.7'
-      }));
+      });
     }
 
     // Check if this is likely from the owner (DSH input box, not external bridge)
@@ -183,84 +209,89 @@ export function apply(ctx, config) {
       Missing.drop(state.missing, now);
     }
 
-    if (!result.emotions || result.emotions.length === 0) return;
+    if (result.emotions && result.emotions.length > 0) {
+      const about = result.about || 'unknown';
+      let strongTrigger = false;
+      const newEntries = [];
 
-    const about = result.about || 'unknown';
-    let needsImmediateSettlement = false;
-    const immediateDeltas = [];
+      for (const hisEmotion of result.emotions) {
+        // Convert to her emotion
+        const herResult = await empathy.convert(hisEmotion, about);
+        if (!herResult) continue;
 
-    for (const hisEmotion of result.emotions) {
-      // Convert to her emotion
-      const herResult = await empathy.convert(hisEmotion, about);
-      if (!herResult) continue;
+        const herWeights = await empathy.weightsFor(herResult.key);
+        const herCap = await empathy.capFor(herResult.key);
+        const score = herResult.intensity * herCap;
 
-      const herWeights = await empathy.weightsFor(herResult.key);
-      const herCap = await empathy.capFor(herResult.key);
-      const score = herResult.intensity * herCap;
+        if (score < 0.15 * herCap) continue;
 
-      if (score < 0.15 * herCap) continue;
+        // Calculate raw deltas (without modifying pool)
+        const deltas = MoodPool.calculateWeighted(herWeights, score, herCap);
+        if (deltas.length === 0) continue;
 
-      // Calculate deltas (without modifying pool)
-      const deltas = MoodPool.calculateWeighted(herWeights, score, herCap);
-      if (deltas.length === 0) continue;
+        // A5: multiply by the composite state modifiers AT JUDGE TIME.
+        // The log records the effective value, with the raw value in
+        // parentheses when a modifier applied.
+        const mods = States.compositeMod(state.states);
+        const activeStateNote = States.formatActive(state.states);
+        const herLabel = await empathy.labelFor(herResult.key);
+        const adjusted = deltas.map(d => {
+          const factor = mods[d.base] ?? 1;
+          return {
+            base: d.base,
+            delta: Math.round(d.delta * factor * 10) / 10,
+            cap: herCap, // A4: carry the per-emotion cap into the queue
+            origDelta: factor !== 1 ? d.delta : undefined
+          };
+        });
 
-      // Log
-      const herLabel = await empathy.labelFor(herResult.key);
-      for (const d of deltas) {
-        const blockName = MoodLog.blockForBase(d.base);
-        fireAndForget(log.append({
-          ts: now, block: blockName, emotion: `${herLabel} ${herResult.key}`,
-          delta: d.delta,
-          reason: (hisEmotion.evidence || text).slice(0, 70),
-          stateNote: States.formatActive(state.states) || '—'
-        }));
-      }
-
-      // Coupling: event propagation
-      for (const d of deltas) {
-        const propagated = Coupling.propagate(state.values, d.base, d.delta);
-        for (const p of propagated) {
-          const pBlock = MoodLog.blockForBase(p.base);
-          fireAndForget(log.append({
-            ts: now, block: pBlock, emotion: '传播',
-            delta: p.delta,
-            reason: `由 ${MoodLog.blockForBase(p.parent)} 传播`,
-            stateNote: '—'
-          }));
+        // Main-entry log rows: effective value (+ original when modified)
+        for (const a of adjusted) {
+          logBatch.push({
+            ts: now, block: MoodLog.blockForBase(a.base),
+            emotion: `${herLabel} ${herResult.key}`,
+            delta: a.delta,
+            origDelta: a.origDelta,
+            reason: (hisEmotion.evidence || text).slice(0, 70),
+            stateNote: a.origDelta !== undefined
+              ? `${activeStateNote} ×${(mods[a.base]).toFixed(1)}`
+              : '—'
+          });
         }
-      }
 
-      // State trigger
-      const stateDef = await empathy.stateFor(herResult.key);
-      if (stateDef) {
-        if (stateDef.when === 'fromUser' && !isOwner) continue;
-        States.activate(state.states, stateDef, now, herResult.key);
-        fireAndForget(log.append({
-          ts: now, block: '状态', emotion: stateDef.name,
-          delta: 0,
-          reason: `触发：${herLabel}`,
-          stateNote: `${stateDef.minutes || 60}min`
-        }));
-      }
-
-      // Immediate settlement for strong hits (>20)
-      if (score > 20) {
-        needsImmediateSettlement = true;
-        for (const d of deltas) {
-          immediateDeltas.push(d);
+        // State trigger. Activation happens AFTER this entry's deltas were
+        // computed, so the newly activated state affects later entries only.
+        const stateDef = await empathy.stateFor(herResult.key);
+        if (stateDef) {
+          if (stateDef.when === 'fromUser' && !isOwner) continue;
+          States.activate(state.states, stateDef, now, herResult.key);
+          logBatch.push({
+            ts: now, block: '状态', emotion: stateDef.name,
+            delta: 0,
+            reason: `触发：${herLabel}`,
+            stateNote: `${stateDef.minutes || 60}min`
+          });
+          strongTrigger = true;
         }
-        // Don't enqueue these — they're applied now
-      } else {
-        // Enqueue for next tick
-        store.enqueue(state, { deltas, ts: now });
+
+        // Strong single hit → immediate settlement
+        if (score > 20) strongTrigger = true;
+
+        newEntries.push({ deltas: adjusted, ts: now });
+      }
+
+      if (newEntries.length > 0) {
+        if (strongTrigger) {
+          // Immediate settlement (SPEC 5.3): settle the WHOLE queue plus this
+          // message's entries — no decay, no lastTickAt reset.
+          settleEntries([...store.drainQueue(state), ...newEntries], now);
+        } else {
+          for (const e of newEntries) store.enqueue(state, e);
+        }
       }
     }
 
-    // Apply immediate settlement (no decay, no tick reset)
-    if (needsImmediateSettlement) {
-      MoodPool.applyDeltas(state.values, immediateDeltas);
-      MoodPool.clamp(state.values);
-    }
+    if (logBatch.length > 0) fireAndForget(log.appendBatch(logBatch));
 
     // Throttled save: write at most once per 3 minutes
     stateDirty = true;
@@ -273,23 +304,21 @@ export function apply(ctx, config) {
     const agentCtx = agent.ctx;
     if (!agentCtx) return;
 
-    // Create status bar for this agent
-    const sb = new StatusBar(agent);
-    statusBars.set(agent.id, sb);
+    statusBars.set(agent.id, new StatusBar(agent));
 
-    // Listen for inbox messages on this agent
+    // Per-agent inbox listener lives on the agent's own context, so it is
+    // removed when the agent is disposed.
     agentCtx.on('agent/inbox/inserted', (p) => {
       handleMessage(p.agent, p.message).catch(err => {
         ctx.logger?.warn?.('[dsh-mood] handleMessage error:', err);
       });
     });
+  });
 
-    // Cleanup on dispose
-    ctx.on('agent/disposed', (p) => {
-      if (p.agent.id === agent.id) {
-        statusBars.delete(agent.id);
-      }
-    });
+  // C2: one shared disposal listener instead of one per agent (the old
+  // pattern leaked a listener for every agent ever created).
+  ctx.on('agent/disposed', (p) => {
+    statusBars.delete(p.agent.id);
   });
 
   // --- Tick timer ---
