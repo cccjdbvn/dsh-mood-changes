@@ -17,11 +17,18 @@ window.__ModuleLoader__.load({
     const FALLBACK = {
       title: '此刻',
       eyebrow: 'Mood changes',
-      footer: '只报状态，不替你开口。',
       steady: '平静',
       waiting: '还没算过',
-      lit: '亮着',
-      calm: '都没到 40',
+      dot: ' · ',
+      colon: '：',
+      listSeparator: '、',
+      minute: '分钟',
+      ago: '前',
+      justNow: '刚刚',
+      hit: '掷中',
+      missed: '未掷中',
+      notRolled: '还没掷过',
+      nightPaused: '夜里停掷',
       happy: '开心',
       sad: '悲伤',
       fear: '害怕',
@@ -34,11 +41,18 @@ window.__ModuleLoader__.load({
     const EN = {
       title: 'Now',
       eyebrow: 'Mood changes',
-      footer: 'Status only. It never speaks for you.',
       steady: 'Steady',
       waiting: 'Not computed yet',
-      lit: 'lit',
-      calm: 'nothing above 40',
+      dot: ' · ',
+      colon: ': ',
+      listSeparator: ', ',
+      minute: ' min',
+      ago: ' ago',
+      justNow: 'just now',
+      hit: 'hit',
+      missed: 'missed',
+      notRolled: 'not rolled yet',
+      nightPaused: 'paused at night',
       happy: 'Joy',
       sad: 'Sorrow',
       fear: 'Fear',
@@ -238,10 +252,25 @@ window.__ModuleLoader__.load({
       const viewportHeight = typeof window === 'undefined' ? 900 : window.innerHeight
       const left = rect ? Math.max(8, Math.min(rect.left, viewportWidth - width - 8)) : 8
       const bottom = rect ? Math.max(8, viewportHeight - rect.top + 10) : 80
-      const tick = Number(data.lastTickAt) || 0
-      const minutes = tick > 0 ? Math.max(0, Math.round((Date.now() - tick) / 60000)) : null
-      const clock = tick > 0 ? new Date(tick).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''
-      const sub = minutes === null ? '' : `${clock} 算的 · ${minutes} 分钟前 · ${lit.length > 0 ? `${t('lit')} ${lit.length} 条` : t('calm')}`
+      const elapsedText = (ms) => {
+        const value = Number(ms)
+        if (!Number.isFinite(value) || value <= 0) return '—'
+        const minutes = Math.floor(Math.max(0, Date.now() - value) / 60000)
+        return minutes < 1 ? t('justNow') : `${minutes}${t('minute')}${t('ago')}`
+      }
+      const litNames = lit.length > 0 ? lit.map((key) => t(key)).join(t('listSeparator')) : t('steady')
+      const sub = `${elapsedText(data.lastTickAt)}${t('dot')}${litNames}`
+      const rollText = (line) => {
+        if (data.night) return t('nightPaused')
+        const result = data.lastRoll?.[line]?.result
+        if (result === 'hit') return t('hit')
+        if (result === 'miss') return t('missed')
+        return t('notRolled')
+      }
+      const feet = [
+        `${t('missing')}${t('colon')}${rollText('missing')}${t('dot')}${elapsedText(data.lastHitAt?.missing)}`,
+        `${t('boredom')}${t('colon')}${rollText('boredom')}${t('dot')}${elapsedText(data.lastHitAt?.boredom)}`,
+      ]
       return h(
         'div',
         {
@@ -294,10 +323,13 @@ window.__ModuleLoader__.load({
               paddingTop: 10,
               borderTop: '1px solid rgba(255,255,255,0.06)',
               fontSize: 10.5,
-              color: 'rgba(255,255,255,0.28)',
+              color: 'rgba(255,255,255,0.36)',
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '4px 18px',
             },
           },
-          t('footer'),
+          feet.map((text, index) => h('span', { key: index }, text)),
         ),
       )
     }

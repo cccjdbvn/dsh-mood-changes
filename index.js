@@ -99,11 +99,14 @@ const DEFAULTS = {
   pollSeconds: 30,
   /** 无聊每小时涨多少；默认一跳 15 分钟，折算下来每跳 +4.5。夜里不涨。 */
   boredomPerHour: 18,
-  /** 她动手做事时无聊乘多少；他说话走 boredomTalkDropFactor。两条共用一个小时的冷却。 */
+  /** 她动手做事时无聊乘多少；他说话走 boredomTalkDropFactor。 */
   boredomDropFactor: 0.5,
   /** 他从对话框或 QQ 桥说话时无聊乘多少。 */
   boredomTalkDropFactor: 0.7,
-  boredomDropCooldownMinutes: 60,
+  /** A=他说话、B=她做事：同一种事件（A 接 A / B 接 B）多久内不再掉。 */
+  boredomSameCooldownMinutes: 60,
+  /** 两种事件之间（A 后接 B / B 后接 A）多久内不再掉。 */
+  boredomCrossCooldownMinutes: 30,
   boredomRollFrom: 50,
   boredomDirectFrom: 80,
 }
@@ -182,6 +185,7 @@ export function apply(ctx, rawConfig = {}) {
   const minute = 60 * 1000
   const sweepMs = Math.max(1, Number(cfg.sweepEveryMinutes) || 15) * minute
   const pollMs = Math.max(1, Number(cfg.pollSeconds) || 30) * 1000
+  const rollMs = Math.max(1, Number(cfg.rollEveryMinutes) || 45) * minute
   /** 白天的无聊每跳涨多少：按每小时速率折算到这一跳。 */
   const boredomPerTick = Number(cfg.boredomPerHour) * (sweepMs / (60 * minute))
   const clock = () => Date.now()
@@ -195,10 +199,12 @@ export function apply(ctx, rawConfig = {}) {
   let lastInjectAt = 0
   let lastActiveAt = 0
   let lastCoolLogAt = 0
-  let lastDropAt = { missing: 0, boredom: 0 }
+  let lastDropAt = { missing: 0, talk: 0, work: 0 }
   let lastNotifyAt = { missing: 0, boredom: 0 }
   let manualDay = ''
   let manualSum = 0
+  let lastHitAt = { missing: 0, boredom: 0 }
+  let lastRoll = { missing: { at: 0, result: '' }, boredom: { at: 0, result: '' } }
   let values = Object.fromEntries(ALL.map((key) => [key, 0]))
   let lifeCache = { mtime: -1, id: undefined }
 
@@ -218,10 +224,12 @@ export function apply(ctx, rawConfig = {}) {
     lastTickAt = clock()
     lastInjectAt = 0
     lastActiveAt = 0
-    lastDropAt = { missing: 0, boredom: 0 }
+    lastDropAt = { missing: 0, talk: 0, work: 0 }
     lastNotifyAt = { missing: 0, boredom: 0 }
     manualDay = localDate(new Date())
     manualSum = 0
+    lastHitAt = { missing: 0, boredom: 0 }
+    lastRoll = { missing: { at: 0, result: '' }, boredom: { at: 0, result: '' } }
   }
 
   const readJson = (path) => JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''))
@@ -254,13 +262,30 @@ export function apply(ctx, rawConfig = {}) {
     if (Number.isFinite(Number(parsed.lastInjectAt))) lastInjectAt = Number(parsed.lastInjectAt)
     if (Number.isFinite(Number(parsed.lastActiveAt))) lastActiveAt = Number(parsed.lastActiveAt)
     for (const key of ['missing', 'boredom']) {
-      const drop = Number(parsed.lastDropAt?.[key])
       const notify = Number(parsed.lastNotifyAt?.[key])
-      if (Number.isFinite(drop)) lastDropAt[key] = drop
       if (Number.isFinite(notify)) lastNotifyAt[key] = notify
+    }
+    for (const key of ['missing', 'talk', 'work']) {
+      const drop = Number(parsed.lastDropAt?.[key])
+      if (Number.isFinite(drop)) lastDropAt[key] = drop
+    }
+    // 旧账：原来只有一个 boredom 时间戳，两边都认它，免得升级后当场多掉一次
+    const legacyDrop = Number(parsed.lastDropAt?.boredom)
+    if (Number.isFinite(legacyDrop) && legacyDrop > 0) {
+      if (!lastDropAt.talk) lastDropAt.talk = legacyDrop
+      if (!lastDropAt.work) lastDropAt.work = legacyDrop
     }
     if (typeof parsed.manualDay === 'string') manualDay = parsed.manualDay
     if (Number.isFinite(Number(parsed.manualSum))) manualSum = Number(parsed.manualSum)
+    for (const line of ['missing', 'boredom']) {
+      const roll = parsed.lastRoll?.[line]
+      const at = Number(roll?.at)
+      if (Number.isFinite(at) && (roll?.result === 'hit' || roll?.result === 'miss')) {
+        lastRoll[line] = { at, result: roll.result }
+      }
+      const hitAt = Number(parsed.lastHitAt?.[line])
+      if (Number.isFinite(hitAt) && hitAt > 0) lastHitAt[line] = hitAt
+    }
   }
 
   function saveState() {
@@ -273,6 +298,11 @@ export function apply(ctx, rawConfig = {}) {
       lastNotifyAt,
       manualDay,
       manualSum: round(manualSum),
+      lastRoll: {
+        missing: { ...lastRoll.missing },
+        boredom: { ...lastRoll.boredom },
+      },
+      lastHitAt: { ...lastHitAt },
     }
     mkdirSync(dirname(statePath), { recursive: true })
     writeFileSync(statePath, `${JSON.stringify(out, null, 2)}\n`)
@@ -648,13 +678,20 @@ export function apply(ctx, rawConfig = {}) {
     log(`思念 ×0.8（你说话了），现在 ${fmt(values.missing)}`)
   }
 
-  /** 无聊掉分：他说话走 0.7，做事走 0.5；两条共用同一个小时一次（lastDropAt.boredom）。 */
-  function dropBoredom(kind, factor) {
+  /** 无聊掉分：他说话（A）走 0.7，做事（B）走 0.5。
+   *  同一种事件隔 boredomSameCooldownMinutes（默认 60）才再掉一次；
+   *  两种事件之间隔 boredomCrossCooldownMinutes（默认 30）。
+   *  计时都从上一次「真正掉了分」那一下算，被挡下的事件不刷新时钟。 */
+  function dropBoredom(kind, factor, line) {
     const now = clock()
-    if (now - lastDropAt.boredom < Number(cfg.boredomDropCooldownMinutes) * minute) return
+    const sameMs = Math.max(0, Number(cfg.boredomSameCooldownMinutes) || 0) * minute
+    const crossMs = Math.max(0, Number(cfg.boredomCrossCooldownMinutes) || 0) * minute
+    const other = lastDropAt[line === 'talk' ? 'work' : 'talk'] ?? 0
+    if (now - (lastDropAt[line] ?? 0) < sameMs) return
+    if (other > 0 && now - other < crossMs) return
     const f = Number.isFinite(Number(factor)) ? Number(factor) : Number(cfg.boredomDropFactor)
     values.boredom = Math.max(0, values.boredom * f)
-    lastDropAt.boredom = now
+    lastDropAt[line] = now
     saveState()
     log(`无聊 ×${f}（${kind}），现在 ${fmt(values.boredom)}`)
   }
@@ -670,33 +707,54 @@ export function apply(ctx, rawConfig = {}) {
 
   // ── 骰子 ────────────────────────────────────────────────────
 
+  /** 记上一轮骰子的结果，给面板看：hit / miss。掷中就顺手记下「上次掷中」的时刻。 */
+  function recordRoll(line, result) {
+    const at = clock()
+    lastRoll[line] = { at, result }
+    if (result === 'hit') lastHitAt[line] = at
+    saveState()
+  }
+
   async function rollMissing() {
     if (stopped || modeNight) return
     const value = values.missing
-    if (value < MISSING_ROLL_FROM) return
+    if (value < MISSING_ROLL_FROM) {
+      recordRoll('missing', 'miss')
+      return
+    }
     if (value >= MISSING_DIRECT_FROM) {
+      recordRoll('missing', 'hit')
       await notifyMissing()
       return
     }
-    if (Math.random() < rollChance(value)) await notifyMissing()
+    const hit = Math.random() < rollChance(value)
+    recordRoll('missing', hit ? 'hit' : 'miss')
+    if (hit) await notifyMissing()
   }
 
   async function rollBoredom() {
     if (stopped || modeNight) return
     const value = values.boredom
-    if (value < Number(cfg.boredomRollFrom)) return
+    if (value < Number(cfg.boredomRollFrom)) {
+      recordRoll('boredom', 'miss')
+      return
+    }
     if (value >= Number(cfg.boredomDirectFrom)) {
+      recordRoll('boredom', 'hit')
       await notifyBoredom()
       return
     }
-    if (Math.random() < rollChance(value)) await notifyBoredom()
+    const hit = Math.random() < rollChance(value)
+    recordRoll('boredom', hit ? 'hit' : 'miss')
+    if (hit) await notifyBoredom()
   }
 
   // ── 开机 ────────────────────────────────────────────────────
 
   loadState()
-  lastTickAt = clock() // 只认开机时间：关机那段整段冻住，不补算
-  modeNight = nightNow(lastTickAt) // 开机按当时的钟点认一段，不补跨段
+  const bootAt = clock()
+  lastTickAt = bootAt // 只认开机时间：关机那段整段冻住，不补算
+  modeNight = nightNow(bootAt) // 开机按当时的钟点认一段，不补跨段
   saveState()
   log(`起来了（${modeNight ? '夜里' : '白天'}）：${valuesLine()}`)
   log(`路径：数据 ${dataDir}｜房间 ${roomDir || '（没配 worldId，加分和三只文件都不接）'}｜会话 ${lifeFile || '—'}`)
@@ -715,14 +773,21 @@ export function apply(ctx, rawConfig = {}) {
       kind: 'exact',
       path: ROUTE_PATH,
       handler: (req, res) => {
+        const now = clock()
         const state = describeState()
         const body = JSON.stringify({
-          at: clock(),
+          at: now,
           label: state.label,
           lit: state.lit,
           steady: state.steady,
           values: Object.fromEntries(ALL.map((key) => [key, round(values[key])])),
           lastTickAt,
+          lastHitAt: { ...lastHitAt },
+          night: modeNight,
+          lastRoll: {
+            missing: { ...lastRoll.missing },
+            boredom: { ...lastRoll.boredom },
+          },
         })
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',
@@ -782,7 +847,7 @@ export function apply(ctx, rawConfig = {}) {
           }
           if (existsSync(actPath)) {
             rmSync(actPath, { force: true })
-            dropBoredom('自己做事', cfg.boredomDropFactor)
+            dropBoredom('自己做事', cfg.boredomDropFactor, 'work')
           }
         } catch (error) {
           log(`扫描出错：${error?.message ?? error}`)
@@ -798,7 +863,7 @@ export function apply(ctx, rawConfig = {}) {
         void rollMissing()
         // 思念掷完隔一分钟再掷无聊；思念没到门槛，这一分钟也照样留（参数稿七之二）
         ctx.timeout(() => void rollBoredom(), minute)
-      }, Math.max(1, Number(cfg.rollEveryMinutes) || 45) * minute),
+      }, rollMs),
     ),
   )
 
@@ -811,14 +876,14 @@ export function apply(ctx, rawConfig = {}) {
         // 思念：只认对话框和 QQ 桥进来的话，共用一小时一次；本鲸发出去的话不扣。
         if (event?.type === 'user/message' && fromHim(event.data?.source)) {
           dropMissing()
-          dropBoredom('你说话了', cfg.boredomTalkDropFactor)
+          dropBoredom('你说话了', cfg.boredomTalkDropFactor, 'talk')
           return
         }
         // 无聊：她真的动过手就算一次，不管这一轮是谁起的；
         // 只有生活线那几样簿记不算「做事」（plan_next / check_alarm / cancel_alarm）。
         if (event?.type === 'tool/call') {
           const name = String(event.data?.name ?? '')
-          if (!NON_WORK_TOOLS.has(name)) dropBoredom(`做了点事（${name || '工具'}）`, cfg.boredomDropFactor)
+          if (!NON_WORK_TOOLS.has(name)) dropBoredom(`做了点事（${name || '工具'}）`, cfg.boredomDropFactor, 'work')
         }
       } catch (error) {
         log(`看会话事件出错：${error?.message ?? error}`)
