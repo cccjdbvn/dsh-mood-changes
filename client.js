@@ -1,4 +1,4 @@
-﻿window.__ModuleLoader__.load({
+window.__ModuleLoader__.load({
   id: 'dsh-mood-changes',
   factory(require) {
     const React = require('react');
@@ -271,7 +271,9 @@
         ctx.effect(() => () => clearInterval(timer), 'dsh-mood-changes: poll');
 
         ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
-          name: 'conversation.composer.dock', id: 'dsh-mood-changes-pill', order: 20,
+          // order 25：与 breezetts 语音条（order 20）错开，固定排在语音条后面。
+          // 之前两边都是 20 平局，重启后加载顺序一变胶囊就换位。
+          name: 'conversation.composer.dock', id: 'dsh-mood-changes-pill', order: 25,
         }, MoodPill));
 
         // C4: the card lives in the frame-wide overlay layer — outside the

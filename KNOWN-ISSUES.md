@@ -1,7 +1,7 @@
-# dsh-mood 0.2.6 已知问题与优化清单
+# dsh-mood 0.2.7 已知问题与优化清单
 
-> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜
-> 对应版本：0.2.6（0.2.2 + E1 + E2 + E3 + E4）
+> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜
+> 对应版本：0.2.7（0.2.2 + E1–E5）
 > 行号以审计时文件为准，后续编辑会漂移，以问题描述定位为准。
 
 ---
@@ -31,6 +31,7 @@
 | E2 | 状态无法回滚（数值回滚了状态还挂着） | ✅ 已实现（0.2.4：mood_rollback 支持 block=状态） |
 | E3 | 判句整体回滚不撤它触发的状态 | ✅ 已实现（0.2.5：纯删除且主条全划线 → 连带撤状态） |
 | E4 | 无聊对工具调用只降一次/小时 | ✅ 已实现（0.2.6：1 小时滚动窗口，第 5 次调用追加第二次 ×0.6；两次都 ×0.6） |
+| E5 | 胶囊槽位与 breezetts 语音条平局（都是 order 20），重启后换位 | ✅ 已修复（0.2.7：胶囊改 order 25，固定在语音条后面） |
 
 修复验证：run.mjs 9 项 + rollback 7 项 + features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 16 项（E4 端到端）+ 判官真机（judge-test.mjs）；14 个 JS 文件 `node --check` 通过。
 
@@ -150,6 +151,7 @@ disable→enable 后，`/dsh-mood-changes/state` 路由仍应答**旧 apply 闭�
 - **E2** `lib/tools.js mood_rollback`：block=状态 时走独立分支——账面划线 + 状态清除/时效回退；`lib/log.js` 替换行级联注记改条件式。
 - **E3** `lib/tools.js mood_rollback`：数值回滚路径加级联——纯删除且判句主条全划线时连带撤触发行与状态；状态修正共用 `settleStateAfterRollback()`。
 - **E4** `lib/boredom.js onToolCall()` + `index.js tools/result`：工具侧 1 小时滚动窗口，第 1 次 ×0.6（照旧冷却）、第 5 次追加 ×0.6（跳冷却），每窗口最多两次；state 加 `toolWindowStart/Count`（init 回填）。
+- **E5** `client.js` 胶囊槽位 order 20→25：与 breezetts 语音条（order 20）错开，平局时加载顺序决定排位、重启即换位的问题根除。同场清理：profile node_modules 的断链 `mood-diag` junction 与旧命名残留 `dsh-mood` junction（都只是别名链接，非注册实体）已删。
 
 ## 功能缺口收账
 
