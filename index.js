@@ -1,4 +1,6 @@
 import Schema from '@deepseek-ai/schemastery';
+import { watch } from 'node:fs';
+import { join } from 'node:path';
 import { MoodStore } from './lib/store.js';
 import { MoodPool } from './lib/pool.js';
 import { Judge } from './lib/judge.js';
@@ -324,6 +326,43 @@ export function apply(ctx, config) {
       resetSummary(now); // a status-bar injection opens a new summary segment
     }
   }
+
+  // --- Baseline file watcher (user decision 2026-11-23) ---
+  // Whenever mood/baseline.json changes — the mood_baseline tool, a hand
+  // edit, anything — reload it and run ONE sync: values below the new
+  // baseline are lifted up to it, values above it stay (her current higher
+  // emotion is kept). Debounced: editors and atomic writes (tmp+rename)
+  // fire several events for one change.
+  const BASES = ['happy', 'sad', 'fear', 'anger', 'surprise', 'disgust'];
+  let baselineDebounce = null;
+  async function syncBaselineFromFile() {
+    try {
+      const fresh = await store.loadBaseline();
+      baselineRef.current = fresh;
+      if (state) {
+        let changed = false;
+        for (const base of BASES) {
+          const target = fresh[base] ?? 0;
+          if ((state.values[base] ?? 0) < target) {
+            state.values[base] = target;
+            changed = true;
+          }
+        }
+        if (changed) fireAndForget(store.saveState(state));
+      }
+    } catch (e) { /* a half-written file mid-save: the next event retries */ }
+  }
+  function scheduleBaselineSync() {
+    if (baselineDebounce) clearTimeout(baselineDebounce);
+    baselineDebounce = setTimeout(() => { baselineDebounce = null; syncBaselineFromFile(); }, 400);
+  }
+  let baselineWatcher = null;
+  try {
+    baselineWatcher = watch(store.moodDir(), (event, filename) => {
+      if (filename && !filename.startsWith('baseline.json')) return;
+      scheduleBaselineSync();
+    });
+  } catch (e) { /* mood dir may not exist yet; the tool path still works */ }
 
   // --- Message flow (session/event): user side ---
 
@@ -686,6 +725,8 @@ export function apply(ctx, config) {
     for (const off of [offSessionEvent, offSessionDisposed, offAgentCreated, offAgentDisposed, offToolsResult]) {
       if (typeof off === 'function') { try { off(); } catch {} }
     }
+    if (baselineDebounce) clearTimeout(baselineDebounce);
+    if (baselineWatcher) { try { baselineWatcher.close(); } catch {} }
     if (stateDirty && state) {
       store.saveState(state).catch(() => {});
     }
