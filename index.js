@@ -1,5 +1,5 @@
 import Schema from '@deepseek-ai/schemastery';
-import { watch } from 'node:fs';
+import { appendFileSync, watch } from 'node:fs';
 import { join } from 'node:path';
 import { MoodStore } from './lib/store.js';
 import { MoodPool } from './lib/pool.js';
@@ -692,8 +692,28 @@ export function apply(ctx, config) {
   }
 
   // --- Tools/result → boredom drop ---
-  const offToolsResult = ctx.on('tools/result', (exec) => {
+  // 会话归属判定（用户 2026-11-23）：思念/无聊的降值只认她的会话——别的会话
+  // （比如工作会话）调工具不再降她的无聊。tools/result 是 Scoped<ToolsService>
+  // 事件，this 绑定发起 agent 的 scope；多路径提取 sessionId，取不到时维持
+  // 旧行为（降），取到且不是她的会话则跳过。附带一次性诊断日志（形状确认后删）。
+  const offToolsResult = ctx.on('tools/result', function (exec) {
     if (!state) return;
+    let sessionId = null;
+    let source = 'none';
+    try {
+      const scoped = this;
+      if (scoped?.scope?.session?.id) { sessionId = scoped.scope.session.id; source = 'this.scope.session.id'; }
+      else if (scoped?.session?.id) { sessionId = scoped.session.id; source = 'this.session.id'; }
+      else if (exec?.agent?.session?.id) { sessionId = exec.agent.session.id; source = 'exec.agent.session.id'; }
+      else if (exec?.agent?.id) { sessionId = exec.agent.id; source = 'exec.agent.id'; }
+      else if (exec?.sessionId) { sessionId = exec.sessionId; source = 'exec.sessionId'; }
+    } catch {}
+    // TEMP DIAG（本机一次性诊断，结构确认后删除）
+    try {
+      appendFileSync('F:/DSH/work/_tmp/tools-result-shape.log',
+        `${new Date().toISOString()} source=${source} sessionId=${sessionId} execKeys=${Object.keys(exec || {}).slice(0, 20).join('|')}\n`);
+    } catch {}
+    if (config.targetSessionId && sessionId && sessionId !== config.targetSessionId) return;
     const now = Date.now();
     const drop = Boredom.drop(state.boredom, now, 'tool');
     if (drop > 0) {
