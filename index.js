@@ -19,6 +19,7 @@ export const Config = Schema.object({
   judgeBaseUrl: Schema.string().default('http://127.0.0.1:8000/v1').description('本地 LLM 端点（OpenAI 兼容，vLLM/LM Studio）'),
   judgeApiKey: Schema.string().default('').description('API Key（可选，多数本地端点不需要）'),
   judgeModel: Schema.string().default('').description('模型名（vLLM 部署时填模型路径或 served-model-name）'),
+  judgeContextPath: Schema.string().default('').description('判官语境文件路径（她是谁/性格/误判纠偏笔记，Markdown）；留空 = 无语境；每次判句读取，改完即生效'),
   judgeTimeout: Schema.number().default(6000).description('判句请求超时（毫秒）'),
   judgeTemperature: Schema.number().default(0.3).description('判官采样温度'),
   tickIntervalMs: Schema.number().default(900000).description('tick 间隔（毫秒，默认 15 分钟）'),
