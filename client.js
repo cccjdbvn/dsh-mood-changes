@@ -89,15 +89,24 @@ window.__ModuleLoader__.load({
     }
 
     // ── bars ──
-    function EmotionBar({ base, value }) {
+    function EmotionBar({ base, value, baseline }) {
       const pct = Math.min(100, Math.max(0, value));
       const color = BASE_COLORS[base] || '#6b7280';
+      const bl = baseline == null ? null : Math.min(100, Math.max(0, baseline));
       return h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 } },
         h('span', { style: { width: 16, fontSize: 12, textAlign: 'right', color: 'var(--dsw-alias-text-secondary, #9ca3af)' } }, BASE_LABELS[base]),
         h('div', { style: { flex: 1, height: 14, background: 'var(--dsw-alias-bg-tertiary, #374151)', borderRadius: 4, position: 'relative', overflow: 'hidden' } },
           h('div', {
             style: { width: pct + '%', height: '100%', background: color, borderRadius: 4, transition: 'width 0.3s ease' }
           }),
+          // Baseline mark: thin vertical line showing where "normal" is.
+          bl != null ? h('div', {
+            title: `基线 ${(+baseline).toFixed(0)}`,
+            style: {
+              position: 'absolute', left: `calc(${bl}% - 1px)`, top: 0, bottom: 0, width: 2,
+              background: 'rgba(255,255,255,0.5)', zIndex: 1,
+            }
+          }) : null,
         ),
         h('span', { style: { width: 36, fontSize: 11, textAlign: 'right', color: 'var(--dsw-alias-text-secondary, #9ca3af)', fontVariantNumeric: 'tabular-nums' } }, value.toFixed(1)),
       );
@@ -180,7 +189,7 @@ window.__ModuleLoader__.load({
           view === 'bars' ?
             h('div', null,
               ...BASE_ORDER.map(base =>
-                h(EmotionBar, { key: base, base, value: state.values[base] || 0 })
+                h(EmotionBar, { key: base, base, value: state.values[base] || 0, baseline: state.baseline?.[base] })
               ),
               state.missing ? h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginTop: 8, marginBottom: 4 } },
                 `思念：${(state.missing.value || 0).toFixed(1)}`) : null,

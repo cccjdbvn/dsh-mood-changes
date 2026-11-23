@@ -640,7 +640,7 @@ export function apply(ctx, config) {
 
   // --- Register HTTP routes ---
   try {
-    registerRoutes(ctx, store, () => state);
+    registerRoutes(ctx, store, baselineRef, () => state);
   } catch (e) {
     ctx.logger?.warn?.('[dsh-mood] route registration error:', e);
   }
