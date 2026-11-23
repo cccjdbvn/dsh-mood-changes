@@ -1,4 +1,4 @@
-import Schema from '@deepseek-ai/schemastery';
+﻿import Schema from '@deepseek-ai/schemastery';
 import { appendFileSync, watch } from 'node:fs';
 import { join } from 'node:path';
 import { MoodStore } from './lib/store.js';
@@ -36,7 +36,7 @@ function textOf(message) {
 }
 
 /** Timer APIs (ctx.interval) require the timer service as a declared dependency. */
-export const inject = ['timer'];
+export const inject = ['timer', 'webServer'];
 
 export function apply(ctx, config) {
   const worldDir = config.worldDir;

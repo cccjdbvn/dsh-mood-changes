@@ -1,4 +1,4 @@
-window.__ModuleLoader__.load({
+﻿window.__ModuleLoader__.load({
   id: 'dsh-mood-changes',
   factory(require) {
     const React = require('react');
@@ -41,7 +41,7 @@ window.__ModuleLoader__.load({
 
     async function fetchState() {
       try {
-        const resp = await fetch('/api/mood/state');
+        const resp = await fetch('/dsh-mood-changes/state');
         if (!resp.ok) return;
         const data = await resp.json();
         shared.data = data;
@@ -136,7 +136,7 @@ window.__ModuleLoader__.load({
         try {
           const params = new URLSearchParams({ date });
           if (block) params.set('block', block);
-          const resp = await fetch('/api/mood/log?' + params.toString());
+          const resp = await fetch('/dsh-mood-changes/log?' + params.toString());
           const data = await resp.json();
           // Newest first in the card's log view.
           setLogEntries((data.entries || []).slice().reverse());
