@@ -572,7 +572,9 @@ export function apply(ctx, config) {
   }
 
   // --- session/event wiring (post-commit feed, qq-bridge pattern) ---
-  ctx.on('session/event', (session, event) => {
+  // Every ctx.on returns a disposer; collect them so a fiber reload removes
+  // ALL listeners (a leaked listener = double judging / stale handlers).
+  const offSessionEvent = ctx.on('session/event', (session, event) => {
     try {
       const sessionId = session?.id;
       if (!sessionId || !event || typeof event.type !== 'string') return;
@@ -603,20 +605,20 @@ export function apply(ctx, config) {
   });
 
   // Per-session maps must not leak after a session leaves the registry.
-  ctx.on('session/disposed', (session) => {
+  const offSessionDisposed = ctx.on('session/disposed', (session) => {
     turnUserTexts.delete(session?.id);
     pendingReplies.delete(session?.id);
   });
 
   // --- Agent lifecycle (status bars only; judging lives on session/event) ---
-  ctx.on('agent/created', (payload) => {
+  const offAgentCreated = ctx.on('agent/created', (payload) => {
     const { agent } = payload;
     if (!agent?.ctx) return;
     statusBars.set(agent.id, new StatusBar(agent));
   });
 
   // C2: one shared disposal listener instead of one per agent.
-  ctx.on('agent/disposed', (p) => {
+  const offAgentDisposed = ctx.on('agent/disposed', (p) => {
     statusBars.delete(p.agent.id);
   });
 
@@ -643,14 +645,15 @@ export function apply(ctx, config) {
   }
 
   // --- Register HTTP routes ---
+  let routeDisposers = [];
   try {
-    registerRoutes(ctx, store, baselineRef, () => state);
+    routeDisposers = registerRoutes(ctx, store, baselineRef, () => state);
   } catch (e) {
     ctx.logger?.warn?.('[dsh-mood] route registration error:', e);
   }
 
   // --- Tools/result → boredom drop ---
-  ctx.on('tools/result', (exec) => {
+  const offToolsResult = ctx.on('tools/result', (exec) => {
     if (!state) return;
     const now = Date.now();
     const drop = Boredom.drop(state.boredom, now, 'tool');
@@ -673,9 +676,16 @@ export function apply(ctx, config) {
   });
 
   // --- Cleanup ---
+  // Remove EVERYTHING this fiber registered: leaked listeners would double-
+  // judge turns and stale route handlers would keep answering with stale
+  // state after a reload.
   return () => {
     tickInterval();
     for (const d of toolDisposers) d();
+    for (const d of routeDisposers) { try { d(); } catch {} }
+    for (const off of [offSessionEvent, offSessionDisposed, offAgentCreated, offAgentDisposed, offToolsResult]) {
+      if (typeof off === 'function') { try { off(); } catch {} }
+    }
     if (stateDirty && state) {
       store.saveState(state).catch(() => {});
     }
