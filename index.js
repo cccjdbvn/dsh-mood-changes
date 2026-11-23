@@ -1,3 +1,4 @@
+import Schema from '@deepseek-ai/schemastery';
 import { MoodStore } from './lib/store.js';
 import { MoodPool } from './lib/pool.js';
 import { Judge } from './lib/judge.js';
@@ -11,20 +12,24 @@ import { StatusBar } from './lib/statusbar.js';
 import { registerRoutes } from './lib/routes.js';
 import { registerTools } from './lib/tools.js';
 
-export const Config = {
-  schema: {
-    type: 'object',
-    properties: {
-      judgeBaseUrl: { type: 'string', description: '本地 LLM 端点', default: 'http://127.0.0.1:1234/v1' },
-      judgeApiKey: { type: 'string', description: 'API Key（可选）', default: '' },
-      judgeModel: { type: 'string', description: '模型名', default: 'local-model' },
-      judgeTimeout: { type: 'number', description: '请求超时（毫秒）', default: 3000 },
-      judgeTemperature: { type: 'number', description: '采样温度', default: 0.3 },
-      tickIntervalMs: { type: 'number', description: 'tick 间隔（毫秒）', default: 900000 },
-      worldDir: { type: 'string', description: '世界目录路径（存放 state 和日志）', default: '' }
-    }
-  }
-};
+export const Config = Schema.object({
+  worldDir: Schema.string().default('').description('世界目录路径（存放 state 和日志）；留空 = 插件不启动'),
+  judgeBaseUrl: Schema.string().default('http://127.0.0.1:8000/v1').description('本地 LLM 端点（OpenAI 兼容，vLLM/LM Studio）'),
+  judgeApiKey: Schema.string().default('').description('API Key（可选，多数本地端点不需要）'),
+  judgeModel: Schema.string().default('').description('模型名（vLLM 部署时填模型路径或 served-model-name）'),
+  judgeTimeout: Schema.number().default(3000).description('判句请求超时（毫秒）'),
+  judgeTemperature: Schema.number().default(0.3).description('判官采样温度'),
+  tickIntervalMs: Schema.number().default(900000).description('tick 间隔（毫秒，默认 15 分钟）'),
+  ownerNames: Schema.array(Schema.string()).default([]).description('主人在 QQ 消息里的显示名；群聊一律不降思念，私聊且名字在列表里才降'),
+});
+
+/** Extract plain text from a message whose content may be a string or blocks. */
+function textOf(message) {
+  const c = message.content;
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) return c.filter(b => b && b.type === 'text').map(b => b.text || '').join('');
+  return '';
+}
 
 export function apply(ctx, config) {
   const worldDir = config.worldDir;
@@ -37,13 +42,13 @@ export function apply(ctx, config) {
   const judge = new Judge(config);
   const empathy = new Empathy();
   const log = new MoodLog(worldDir);
+  const ownerNames = config.ownerNames || [];
 
   // Mutable state (loaded from disk on start)
   let state = null;
 
   // Single source of truth for the baseline: the mood_baseline tool writes
-  // into this ref, and tick() reads from it (KNOWN-ISSUES A3 — previously
-  // tick used a stale closure copy and tool edits never took effect).
+  // into this ref, and tick() reads from it (KNOWN-ISSUES A3).
   const baselineRef = { current: { happy: 15, sad: 5, fear: 5, anger: 0, surprise: 0, disgust: 5 } };
 
   // Per-agent status bar instances
@@ -53,6 +58,15 @@ export function apply(ctx, config) {
   const STATE_SAVE_INTERVAL = 180000; // 3 min
   let lastStateSaveAt = 0;
   let stateDirty = false;
+
+  // Message ring buffer: context source for the judge's second round.
+  const CONTEXT_WINDOW_MS = 20 * 60000; // 20 minutes
+  const CONTEXT_MAX = 10; // up to 10 recent messages, never reaching further back
+  const msgBuffer = [];
+
+  // Summary bookkeeping ("搭车"): reset on every injection (status bar or
+  // knock), rendered only when a knock fires.
+  let summary = null;
 
   function fireAndForget(promise) {
     promise.catch(() => {});
@@ -70,16 +84,66 @@ export function apply(ctx, config) {
   async function init() {
     state = await store.loadState();
     baselineRef.current = await store.loadBaseline();
-    // Ensure queue exists
     if (!state.queue) state.queue = [];
+    // Backfill newer fields on old state files.
+    if (!state.missing) state.missing = { value: 0, lastDropAt: 0, lastNotifyAt: 0, lastRoll: 0, lastHitAt: 0, manualDay: '', manualSum: 0 };
+    if (!state.missing.lastNotifyAt) state.missing.lastNotifyAt = 0;
+    if (!state.missing.lastRoll) state.missing.lastRoll = 0;
+    if (!state.boredom) state.boredom = { value: 0, lastMsgAt: 0, lastToolAt: 0 };
+    if (!state.boredom.lastNotifyAt) state.boredom.lastNotifyAt = 0;
+    if (!state.boredom.lastRoll) state.boredom.lastRoll = 0;
+    resetSummary(Date.now());
+  }
+
+  function resetSummary(now) {
+    summary = {
+      since: now,
+      count: 0,        // main entries only (no propagation, no damping)
+      big: [],         // single entries with |delta| > 20
+      snapshot: state ? { ...state.values } : null
+    };
+  }
+
+  function buildSummary(now) {
+    if (!summary || summary.count === 0) return '';
+    const fmt = t => new Date(t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const lines = [];
+    lines.push(`（${fmt(summary.since)}–${fmt(now)}，共 ${summary.count} 笔）`);
+    if (summary.snapshot && state) {
+      const nets = [];
+      for (const base of ['happy', 'sad', 'fear', 'anger', 'surprise', 'disgust']) {
+        const d = (state.values[base] ?? 0) - (summary.snapshot[base] ?? 0);
+        if (Math.abs(d) >= 0.05) nets.push(`${MoodLog.blockForBase(base)} ${d >= 0 ? '+' : ''}${d.toFixed(1)}`);
+      }
+      if (nets.length) lines.push(`六情本段：${nets.join(' / ')}`);
+    }
+    for (const b of summary.big.slice(0, 3)) {
+      lines.push(`单笔较大：${b.label} ${b.delta >= 0 ? '+' : ''}${b.delta}（${b.reason}）`);
+    }
+    return '\n' + lines.join('\n');
+  }
+
+  /** Recent context for the judge's second round: last 10 messages within
+   * 20 minutes, oldest first, excluding the message being judged. */
+  function recentContext(now) {
+    const ctx = [];
+    for (let i = msgBuffer.length - 1; i >= 0 && ctx.length < CONTEXT_MAX; i--) {
+      const m = msgBuffer[i];
+      if (now - m.ts > CONTEXT_WINDOW_MS) break;
+      ctx.unshift(m.text);
+    }
+    return ctx;
+  }
+
+  function pushBuffer(text, ts) {
+    msgBuffer.push({ text, ts });
+    if (msgBuffer.length > 60) msgBuffer.shift();
   }
 
   /**
    * Settlement: apply queued deltas to the pool, then run event propagation
-   * for exactly these entries (KNOWN-ISSUES A6 — propagation now happens at
-   * settlement time, together with the main entries, and is also multiplied
-   * by the active state modifiers per A5). Shared by tick() and by the
-   * immediate settlement path. Does NOT decay and does NOT touch lastTickAt.
+   * for exactly these entries (A6). Shared by tick() and immediate
+   * settlement. Does NOT decay and does NOT touch lastTickAt.
    */
   function settleEntries(entries, now) {
     if (!entries || entries.length === 0) return;
@@ -108,18 +172,55 @@ export function apply(ctx, config) {
     if (propLog.length) fireAndForget(log.appendBatch(propLog));
   }
 
+  // --- Knock (掷骰敲门): missing / boredom ask to interact ---
+
+  /** Inject a knock message (with the riding summary) into all live agents. */
+  function knock(text, now) {
+    const full = text + buildSummary(now);
+    const agents = ctx.get('agents');
+    if (agents) {
+      for (const agent of agents.list()) {
+        const sb = statusBars.get(agent.id);
+        if (sb) sb.knock(full);
+      }
+    }
+    resetSummary(now);
+    state.lastInjectAt = now; // a knock also opens a new summary segment
+  }
+
+  function tryKnock(now) {
+    // 「有气无力」 skips dice rolls entirely (SPEC 5.5).
+    if (States.hasSkipRoll(state.states)) return;
+
+    const m = state.missing;
+    if (!(m.lastNotifyAt && now - m.lastNotifyAt < 60 * 60000) && Missing.shouldKnock(m, now)) {
+      m.lastNotifyAt = now;
+      const v = (m.value || 0).toFixed(1);
+      knock(m.value >= 80
+        ? `思念 ${v}，好些时候没和主人说话了。`
+        : `思念 ${v}，要不要和主人说句话？`, now);
+    }
+
+    const b = state.boredom;
+    if (!(b.lastNotifyAt && now - b.lastNotifyAt < 60 * 60000) && Boredom.shouldKnock(b, now)) {
+      b.lastNotifyAt = now;
+      knock(`无聊 ${(b.value || 0).toFixed(1)}，要不要自己做点什么？`, now);
+    }
+  }
+
   // --- Tick ---
   async function tick(now) {
     if (!state) return;
 
-    const dtMs = now - (state.lastTickAt || now);
+    // B3: freeze while offline — elapsed time is capped at one tick, so a
+    // restart after hours away decays exactly one step, not the whole gap.
+    const dtMs = Math.min(now - (state.lastTickAt || now), config.tickIntervalMs || 900000);
     if (dtMs < 60000) return; // Minimum 1 minute between ticks
 
     // 1. Decay toward the CURRENT baseline (A3)
     state.values = MoodPool.decay(state.values, baselineRef.current, dtMs);
 
-    // 2. Settle the event queue (apply + propagate; modifiers were applied
-    //    at judge time on the queued deltas, so no re-multiplication here)
+    // 2. Settle the event queue (apply + propagate)
     settleEntries(store.drainQueue(state), now);
 
     // 3. Coupling: tick damping
@@ -133,7 +234,6 @@ export function apply(ctx, config) {
     const boredomStep = States.boredomStepBonus(state.states);
     Boredom.tick(state.boredom, now, boredomStep);
 
-    // Log missing cross-threshold
     if (missingResult.crossedThreshold) {
       fireAndForget(log.append({
         ts: now, block: '思念', emotion: '思念',
@@ -155,7 +255,10 @@ export function apply(ctx, config) {
     state.lastTickAt = now;
     await store.saveState(state);
 
-    // 8. Maybe inject status
+    // 8. Knock dice (missing / boredom)
+    tryKnock(now);
+
+    // 9. Maybe inject status bar
     if (StatusBar.shouldInject(state, now)) {
       state.lastInjectAt = now;
       const agents = ctx.get('agents');
@@ -167,6 +270,7 @@ export function apply(ctx, config) {
           } catch (e) { /* agent may not be ready */ }
         }
       }
+      resetSummary(now); // a status-bar injection opens a new summary segment
     }
   }
 
@@ -177,16 +281,22 @@ export function apply(ctx, config) {
     // Only process user messages
     if (message.role !== 'user') return;
 
-    // Skip steer messages injected by ourselves (they start with 【情绪】)
-    // NOTE (KNOWN-ISSUES B2): prefix matching is fragile; switch to a source
-    // marker once the injected message shape is verified at runtime.
-    const text = typeof message.content === 'string' ? message.content : '';
-    if (!text.trim() || text.startsWith('【情绪】')) return;
+    const msgSource = message.source || {};
+    const kind = msgSource.kind || '';
+
+    // B2: skip our own injections (status bars and knocks) by source marker.
+    if (kind === 'plugin:dsh-mood') return;
+
+    const text = textOf(message);
+    if (!text.trim()) return;
 
     const now = Date.now();
 
-    // Judge (with context if it's ambiguous later)
-    const result = await judge.judge(text, null);
+    // Judge: first round on the sentence alone; second round with recent
+    // context when the first is not confident (B4/判官两级).
+    const context = recentContext(now);
+    const result = await judge.judge(text, context);
+    pushBuffer(text, now);
 
     const logBatch = [];
 
@@ -200,9 +310,21 @@ export function apply(ctx, config) {
       });
     }
 
-    // Check if this is likely from the owner (DSH input box, not external bridge)
-    const msgSource = message.source || {};
-    const isOwner = !msgSource.kind || msgSource.kind === 'user' || msgSource.kind === 'composer';
+    // B1: who counts as the owner?
+    //  - DSH composer (no plugin kind) → owner
+    //  - QQ bridge private chat + name in ownerNames → owner
+    //  - group chat or anyone else → not the owner (missing never drops)
+    let isOwner = false;
+    if (!kind || kind === 'user') {
+      isOwner = true;
+    } else if (kind.startsWith('plugin:')) {
+      const m = text.match(/^\[QQ[^\]]*\]\s*([^：:]{1,40})[：:]/);
+      if (m) {
+        const who = m[1].trim();
+        const isPrivate = text.startsWith('[QQ · 私聊]');
+        isOwner = isPrivate && ownerNames.includes(who);
+      }
+    }
 
     // Missing drop: only owner
     if (isOwner) {
@@ -215,7 +337,6 @@ export function apply(ctx, config) {
       const newEntries = [];
 
       for (const hisEmotion of result.emotions) {
-        // Convert to her emotion
         const herResult = await empathy.convert(hisEmotion, about);
         if (!herResult) continue;
 
@@ -225,13 +346,10 @@ export function apply(ctx, config) {
 
         if (score < 0.15 * herCap) continue;
 
-        // Calculate raw deltas (without modifying pool)
         const deltas = MoodPool.calculateWeighted(herWeights, score, herCap);
         if (deltas.length === 0) continue;
 
         // A5: multiply by the composite state modifiers AT JUDGE TIME.
-        // The log records the effective value, with the raw value in
-        // parentheses when a modifier applied.
         const mods = States.compositeMod(state.states);
         const activeStateNote = States.formatActive(state.states);
         const herLabel = await empathy.labelFor(herResult.key);
@@ -257,10 +375,18 @@ export function apply(ctx, config) {
               ? `${activeStateNote} ×${(mods[a.base]).toFixed(1)}`
               : '—'
           });
+          // Summary bookkeeping: main entries only.
+          summary.count += 1;
+          if (Math.abs(a.delta) > 20) {
+            summary.big.push({
+              label: herLabel,
+              delta: a.delta,
+              reason: (hisEmotion.evidence || text).slice(0, 10)
+            });
+          }
         }
 
-        // State trigger. Activation happens AFTER this entry's deltas were
-        // computed, so the newly activated state affects later entries only.
+        // State trigger (activation affects later entries only).
         const stateDef = await empathy.stateFor(herResult.key);
         if (stateDef) {
           if (stateDef.when === 'fromUser' && !isOwner) continue;
@@ -274,7 +400,6 @@ export function apply(ctx, config) {
           strongTrigger = true;
         }
 
-        // Strong single hit → immediate settlement
         if (score > 20) strongTrigger = true;
 
         newEntries.push({ deltas: adjusted, ts: now });
@@ -282,8 +407,7 @@ export function apply(ctx, config) {
 
       if (newEntries.length > 0) {
         if (strongTrigger) {
-          // Immediate settlement (SPEC 5.3): settle the WHOLE queue plus this
-          // message's entries — no decay, no lastTickAt reset.
+          // Immediate settlement (SPEC 5.3): whole queue + this message.
           settleEntries([...store.drainQueue(state), ...newEntries], now);
         } else {
           for (const e of newEntries) store.enqueue(state, e);
@@ -306,8 +430,6 @@ export function apply(ctx, config) {
 
     statusBars.set(agent.id, new StatusBar(agent));
 
-    // Per-agent inbox listener lives on the agent's own context, so it is
-    // removed when the agent is disposed.
     agentCtx.on('agent/inbox/inserted', (p) => {
       handleMessage(p.agent, p.message).catch(err => {
         ctx.logger?.warn?.('[dsh-mood] handleMessage error:', err);
@@ -315,8 +437,7 @@ export function apply(ctx, config) {
     });
   });
 
-  // C2: one shared disposal listener instead of one per agent (the old
-  // pattern leaked a listener for every agent ever created).
+  // C2: one shared disposal listener instead of one per agent.
   ctx.on('agent/disposed', (p) => {
     statusBars.delete(p.agent.id);
   });
@@ -372,7 +493,6 @@ export function apply(ctx, config) {
   return () => {
     tickInterval();
     for (const d of toolDisposers) d();
-    // Force final save if dirty
     if (stateDirty && state) {
       store.saveState(state).catch(() => {});
     }

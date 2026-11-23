@@ -2,10 +2,11 @@
     - id: dsh-mood
       name: 'dsh-mood'
       config:
-        judgeBaseUrl: 'http://127.0.0.1:1234/v1'
+        judgeBaseUrl: 'http://127.0.0.1:8000/v1'
         judgeApiKey: ''
-        judgeModel: 'local-model'
+        judgeModel: '/mnt/f/ai/model_mood-judge/Qwen2.5-3B-AWQ'
         judgeTimeout: 3000
         judgeTemperature: 0.3
         tickIntervalMs: 900000
         worldDir: ''
+        ownerNames: []
