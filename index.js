@@ -31,6 +31,9 @@ function textOf(message) {
   return '';
 }
 
+/** Timer APIs (ctx.interval) require the timer service as a declared dependency. */
+export const inject = ['timer'];
+
 export function apply(ctx, config) {
   const worldDir = config.worldDir;
   if (!worldDir) {
