@@ -13,7 +13,7 @@ window.__ModuleLoader__.load({
       surprise: '#10b981',
       disgust: '#84cc16',
     };
-    const BASE_LABELS = { happy: '乐', sad: '悲', anger: '怒', fear: '惧', surprise: '惊', disgust: '厌' };
+    const BASE_LABELS = { happy: '开心', sad: '伤心', anger: '生气', fear: '害怕', surprise: '惊讶', disgust: '厌恶' };
     const BASE_ORDER = ['happy', 'sad', 'anger', 'fear', 'surprise', 'disgust'];
 
     // ── shared store: one poll, two slots (pill in dock, card in overlay) ──
@@ -95,7 +95,7 @@ window.__ModuleLoader__.load({
       const barLabel = label || BASE_LABELS[base] || base;
       const bl = baseline == null ? null : Math.min(100, Math.max(0, baseline));
       return h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 } },
-        h('span', { style: { width: 16, fontSize: 12, textAlign: 'right', color: 'var(--dsw-alias-text-secondary, #9ca3af)' } }, barLabel),
+        h('span', { style: { width: 32, fontSize: 12, textAlign: 'right', color: 'var(--dsw-alias-text-secondary, #9ca3af)' } }, barLabel),
         h('div', { style: { flex: 1, height: 14, background: 'var(--dsw-alias-bg-tertiary, #374151)', borderRadius: 4, position: 'relative', overflow: 'hidden' } },
           h('div', {
             style: { width: pct + '%', height: '100%', background: barColor, borderRadius: 4, transition: 'width 0.3s ease' }
