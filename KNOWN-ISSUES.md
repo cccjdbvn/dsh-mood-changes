@@ -1,7 +1,7 @@
 # dsh-mood 0.2.2 已知问题与优化清单
 
-> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚
-> 对应版本：0.2.2（原 v2.0.0 + 修复 + 直判链路重构）
+> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜
+> 对应版本：0.2.3（0.2.2 + E1 修复）
 > 行号以审计时文件为准，后续编辑会漂移，以问题描述定位为准。
 
 ---
@@ -27,8 +27,9 @@
 | C3 | state.json 非原子写 | ✅ 已修复（tmp+rename，log 同样处理） |
 | C4 | client 卡片未 portal 到 body | ⏳ **待办** |
 | D1 | 判句入账 3 分钟节流内崩溃丢账 | ✅ 已修复（0.2.2：有实际入账/思念降时立即落盘） |
+| E1 | 传播源不唯一：副情绪也向外传播并回传主情绪 | ✅ 已修复（0.2.3：每笔只由落账值最大的 base 传播，且用实际落账值） |
 
-修复验证：run.mjs 9 项 + rollback 7 项 + features 22 项 + index-flow 16 项（判官走词表降级，无 vLLM 也能跑）+ 判官真机（judge-test.mjs）全过；14 个 JS 文件 `node --check` 通过。
+修复验证：run.mjs 9 项 + rollback 7 项 + features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + 判官真机（judge-test.mjs）；14 个 JS 文件 `node --check` 通过。
 
 ---
 
@@ -67,6 +68,16 @@ session/event 当前收所有 session 的消息进判官窗口（与 statusBars 
 
 ---
 
+## 2026-11-23 深夜：E1 传播回声（左脚踩右脚）
+
+**症状**（情绪日志 2026-11-23 21:49/21:54 两笔「委屈」可见）：一笔判句拆成多条 base delta 后（hurt = 悲 0.8 / 怒 0.2），**每条 delta 都各自向外传播**——只有 2.8 的怒也传播，还按矩阵（anger→sad +0.05）**传回悲**，并被「委屈着 sad×1.2」状态放大。悲传怒、怒传悲，互为回声。
+
+**根因**：`settleEntries` 的传播循环遍历 `entry.deltas` 的**全部**条目，而 SPEC 5.6 的语义是「**主情绪**的分量传给相关情绪」。另外传播量用的是入队请求值 `d.delta`，不是实际落账值（被 cap/0/100 夹过），值贴池边时会传出从未落地的量。
+
+**修复**（0.2.3）：每笔 entry 只让**实际落账值最大的那条 base** 传播，传播源改用 `actual`。副情绪不再传播，回声消失。传播行格式/生效时刻不变，回滚级联（按父块名+同生效时刻匹配）不受影响。回归断言进 `index-flow-test.mjs`（场景 A：hurt 词表降级后日志不得出现「由 怒 传播」）。
+
+---
+
 ## 已修复明细（供 review）
 
 - **A1** `log.js dateFor()`：改用本地 `getFullYear/getMonth/getDate`，禁用 `toISOString`。
@@ -82,6 +93,7 @@ session/event 当前收所有 session 的消息进判官窗口（与 statusBars 
 - **C2** `index.js`：`agent/disposed` 顶层注册一次。
 - **C3** `store.js`/`log.js`：`atomicWrite()`（tmp+rename）。
 - **D1** `index.js consumeJudge/onUserMessage`：有实际入账或思念实际下降时立即 `saveState`（绕 3 分钟节流——否则节流窗口内崩溃会丢日志已记的账）。
+- **E1** `index.js settleEntries()`：传播只取每笔 entry 中实际落账值最大的 base、以实际落账值为源；副情绪不再传播、不再回传主情绪。
 
 ## 功能缺口收账
 

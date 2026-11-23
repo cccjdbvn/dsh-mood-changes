@@ -1,4 +1,4 @@
-﻿import Schema from '@deepseek-ai/schemastery';
+import Schema from '@deepseek-ai/schemastery';
 import { appendFileSync, watch } from 'node:fs';
 import { join } from 'node:path';
 import { MoodStore } from './lib/store.js';
@@ -177,6 +177,8 @@ export function apply(ctx, config) {
 
     for (const entry of entries) {
       const deltas = entry.deltas || [];
+      let primaryBase = null;
+      let primaryActual = 0;
       for (const d of deltas) {
         const before = state.values[d.base] ?? 0;
         MoodPool.apply(state.values, d.base, d.delta, d.cap);
@@ -201,9 +203,20 @@ export function apply(ctx, config) {
             reason: (entry.reason || '').slice(0, 10)
           });
         }
+        // E1: track the dominant base of this entry (largest landed delta).
+        if (Math.abs(actual) > Math.abs(primaryActual)) {
+          primaryBase = d.base;
+          primaryActual = actual;
+        }
       }
-      for (const d of deltas) {
-        const propagated = Coupling.propagate(state.values, d.base, d.delta, mods);
+      // E1 fix (2026-11-23): SPEC 5.6 says 「主情绪的分量传给相关情绪」—
+      // only the dominant base propagates, using the delta that actually
+      // landed. Previously EVERY delta propagated, so a secondary base
+      // (e.g. anger 2.8 of hurt, vs sad 11.2) spread to others AND back
+      // into the primary via the reciprocal matrix entries — the log
+      // showed 「由 怒 传播」 rows feeding 悲, a mutual echo (左脚踩右脚).
+      if (primaryBase && Math.abs(primaryActual) >= 0.01) {
+        const propagated = Coupling.propagate(state.values, primaryBase, primaryActual, mods);
         for (const p of propagated) {
           logBatch.push({
             ts: now, effectiveAt: now,
