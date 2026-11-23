@@ -137,7 +137,8 @@ window.__ModuleLoader__.load({
           if (block) params.set('block', block);
           const resp = await fetch('/api/mood/log?' + params.toString());
           const data = await resp.json();
-          setLogEntries(data.entries || []);
+          // Newest first in the card's log view.
+          setLogEntries((data.entries || []).slice().reverse());
         } catch (e) {
           setLogEntries([]);
         }
