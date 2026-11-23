@@ -1,7 +1,7 @@
-# dsh-mood 0.2.4 已知问题与优化清单
+# dsh-mood 0.2.6 已知问题与优化清单
 
-> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜
-> 对应版本：0.2.5（0.2.2 + E1 + E2 + E3）
+> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜
+> 对应版本：0.2.6（0.2.2 + E1 + E2 + E3 + E4）
 > 行号以审计时文件为准，后续编辑会漂移，以问题描述定位为准。
 
 ---
@@ -30,8 +30,9 @@
 | E1 | 传播源不唯一：副情绪也向外传播并回传主情绪 | ✅ 已修复（0.2.3：每笔只由落账值最大的 base 传播，且用实际落账值） |
 | E2 | 状态无法回滚（数值回滚了状态还挂着） | ✅ 已实现（0.2.4：mood_rollback 支持 block=状态） |
 | E3 | 判句整体回滚不撤它触发的状态 | ✅ 已实现（0.2.5：纯删除且主条全划线 → 连带撤状态） |
+| E4 | 无聊对工具调用只降一次/小时 | ✅ 已实现（0.2.6：1 小时滚动窗口，第 5 次调用追加第二次 ×0.6；两次都 ×0.6） |
 
-修复验证：run.mjs 9 项 + rollback 7 项 + features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ 判官真机（judge-test.mjs）；14 个 JS 文件 `node --check` 通过。
+修复验证：run.mjs 9 项 + rollback 7 项 + features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 16 项（E4 端到端）+ 判官真机（judge-test.mjs）；14 个 JS 文件 `node --check` 通过。
 
 ---
 
@@ -116,6 +117,20 @@ disable→enable 后，`/dsh-mood-changes/state` 路由仍应答**旧 apply 闭�
 
 ---
 
+## 2026-11-23 夜：E4 无聊·工具侧窗口衰减（机制变更）
+
+**用户拍板的语义**：工具调用按 **1 小时滚动窗口**计数，每窗口最多两次衰减，**两次都是 ×0.6**（原单次 ×0.5 → 改为 ×0.6）：
+
+- 窗口内第 1 次调用 → 正常衰减 ×0.6（照旧受冷却约束：同类型 1h / 跨类型 30min）；
+- 窗口内第 5 次调用 → **追加**第二次衰减 ×0.6，跳过冷却；
+- 第二次衰减后窗口清零（下个调用是新窗口的第 1 次）；第二次**不锚定** `lastToolAt`（纯加成，不干扰冷却节奏）；
+- 计数照数被冷却挡住的调用（第 1 次没衰减也照样往 5 数）；
+- 消息侧（×0.7）与互斥冷却完全不动；仍只认她会话的工具调用。
+
+**实现**：`Boredom.onToolCall()`（boredom.js）替代 handler 里的 `drop(…,'tool')`；state 新增 `toolWindowStart`/`toolWindowCount`（init 回填，旧文件兼容）；日志两次衰减分两行，reason 分别为 `做了件事（name）×0.6` 和 `做了件事（name）×0.6（1小时内第5次）`。注意 ×0.6 是**值乘系数**（如 60→36），不是减 60%。
+
+---
+
 ## 已修复明细（供 review）
 
 - **A1** `log.js dateFor()`：改用本地 `getFullYear/getMonth/getDate`，禁用 `toISOString`。
@@ -134,6 +149,7 @@ disable→enable 后，`/dsh-mood-changes/state` 路由仍应答**旧 apply 闭�
 - **E1** `index.js settleEntries()`：传播只取每笔 entry 中实际落账值最大的 base、以实际落账值为源；副情绪不再传播、不再回传主情绪。
 - **E2** `lib/tools.js mood_rollback`：block=状态 时走独立分支——账面划线 + 状态清除/时效回退；`lib/log.js` 替换行级联注记改条件式。
 - **E3** `lib/tools.js mood_rollback`：数值回滚路径加级联——纯删除且判句主条全划线时连带撤触发行与状态；状态修正共用 `settleStateAfterRollback()`。
+- **E4** `lib/boredom.js onToolCall()` + `index.js tools/result`：工具侧 1 小时滚动窗口，第 1 次 ×0.6（照旧冷却）、第 5 次追加 ×0.6（跳冷却），每窗口最多两次；state 加 `toolWindowStart/Count`（init 回填）。
 
 ## 功能缺口收账
 

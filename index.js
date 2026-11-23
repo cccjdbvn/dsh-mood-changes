@@ -108,6 +108,9 @@ export function apply(ctx, config) {
     if (!state.boredom) state.boredom = { value: 0, lastMsgAt: 0, lastToolAt: 0 };
     if (!state.boredom.lastNotifyAt) state.boredom.lastNotifyAt = 0;
     if (!state.boredom.lastRoll) state.boredom.lastRoll = 0;
+    // 工具侧窗口计数的回填（2026-11-23 起有）
+    if (state.boredom.toolWindowStart === undefined) state.boredom.toolWindowStart = 0;
+    if (state.boredom.toolWindowCount === undefined) state.boredom.toolWindowCount = 0;
     resetSummary(Date.now());
   }
 
@@ -729,13 +732,26 @@ export function apply(ctx, config) {
     } catch {}
     if (config.targetSessionId && sessionId && sessionId !== config.targetSessionId) return;
     const now = Date.now();
-    const drop = Boredom.drop(state.boredom, now, 'tool');
-    if (drop > 0) {
-      fireAndForget(log.append({
-        ts: now, block: '无聊', emotion: '无聊',
-        delta: -Math.round(drop * 10) / 10,
-        reason: `做了件事（${exec.name}）×0.5`
-      }));
+    // 2026-11-23 工具侧窗口衰减（用户拍板）：窗口内第 1 次 ×0.6（照旧冷却），
+    // 第 5 次追加一次 ×0.6（跳过冷却）；每窗口最多两次。
+    const { first, second } = Boredom.onToolCall(state.boredom, now);
+    if (first > 0 || second > 0) {
+      const batch = [];
+      if (first > 0) {
+        batch.push({
+          ts: now, block: '无聊', emotion: '无聊',
+          delta: -Math.round(first * 10) / 10,
+          reason: `做了件事（${exec.name}）×0.6`
+        });
+      }
+      if (second > 0) {
+        batch.push({
+          ts: now, block: '无聊', emotion: '无聊',
+          delta: -Math.round(second * 10) / 10,
+          reason: `做了件事（${exec.name}）×0.6（1小时内第5次）`
+        });
+      }
+      fireAndForget(log.appendBatch(batch));
       stateDirty = true;
       saveStateIfDirty(now).catch(() => {});
     }
