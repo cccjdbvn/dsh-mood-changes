@@ -111,6 +111,8 @@ export function apply(ctx, config) {
     // 工具侧窗口计数的回填（2026-11-23 起有）
     if (state.boredom.toolWindowStart === undefined) state.boredom.toolWindowStart = 0;
     if (state.boredom.toolWindowCount === undefined) state.boredom.toolWindowCount = 0;
+    // 回滚标记队列的回填（2026-11-24 起，E7b）
+    if (!Array.isArray(state.pendingRollback)) state.pendingRollback = [];
     resetSummary(Date.now());
   }
 

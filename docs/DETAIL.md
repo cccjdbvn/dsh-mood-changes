@@ -30,7 +30,7 @@
 ## 模型可用的三个工具
 
 - `mood_log` — 按天查情绪日志，可按情绪块筛选
-- `mood_rollback` — 回滚当天的记录（数值真回滚、连带撤传播；block=状态 清除误触发状态；判句整体纯删除时状态连带撤）。三种用法：单笔 time+block（可改值）/ 范围清扫 from+to（范围内判句主条一次全撤）/ 列表批量 items
+- `mood_rollback` — 回滚当天的记录（数值真回滚、连带撤传播；block=状态 清除误触发状态；判句整体纯删除时状态连带撤）。用法：单笔 time+block（可改值）/ 范围清扫 from+to / 列表批量 items / 标记机制（mark 攒标记、executeMarked 一键执行、unmark 解除、无参数列清单）
 - `mood_baseline` — 写六情基线（写完自动同步：不足的补齐、超过的不动）
 
 ## 注意
