@@ -1,5 +1,5 @@
 {
-  "name": "dsh-mood",
+  "name": "dsh-mood-changes",
   "version": "0.2.2",
   "description": "DSH plugin: six-affect emotional pool; a local judge reads each conversation round and decides the agent's own emotion directly, with coupling propagation and daily audit logs",
   "license": "MIT",

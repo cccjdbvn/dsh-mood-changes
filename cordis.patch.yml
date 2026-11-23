@@ -1,6 +1,6 @@
 - insert:
-    - id: dsh-mood
-      name: 'dsh-mood'
+    - id: dsh-mood-changes
+      name: 'dsh-mood-changes'
       config:
         judgeBaseUrl: 'http://127.0.0.1:8000/v1'
         judgeApiKey: ''

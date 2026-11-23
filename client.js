@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: 'dsh-mood',
+  id: 'dsh-mood-changes',
   factory(require) {
     const React = require('react');
     const { useState, useEffect, useCallback } = React;
@@ -268,17 +268,17 @@ window.__ModuleLoader__.load({
         // Immediate first fetch.
         fetchState();
 
-        ctx.effect(() => () => clearInterval(timer), 'dsh-mood: poll');
+        ctx.effect(() => () => clearInterval(timer), 'dsh-mood-changes: poll');
 
         ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
-          name: 'conversation.composer.dock', id: 'dsh-mood-pill', order: 20,
+          name: 'conversation.composer.dock', id: 'dsh-mood-changes-pill', order: 20,
         }, MoodPill));
 
         // C4: the card lives in the frame-wide overlay layer — outside the
         // composer's scroll/overflow containers — instead of fixed inside
         // the dock slot.
         ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-          name: 'shell.overlay', id: 'dsh-mood-card', order: 100,
+          name: 'shell.overlay', id: 'dsh-mood-changes-card', order: 100,
         }, MoodOverlay));
       },
     };

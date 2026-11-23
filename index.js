@@ -41,7 +41,7 @@ export const inject = ['timer'];
 export function apply(ctx, config) {
   const worldDir = config.worldDir;
   if (!worldDir) {
-    ctx.logger?.warn?.('[dsh-mood] worldDir not configured; plugin inactive');
+    ctx.logger?.warn?.('[dsh-mood-changes] worldDir not configured; plugin inactive');
     return;
   }
 
@@ -393,7 +393,7 @@ export function apply(ctx, config) {
     const kind = typeof source.kind === 'string' ? source.kind : '';
 
     // B2: skip our own injections (status bars and knocks) by source marker.
-    if (kind === 'plugin:dsh-mood') return;
+    if (kind === 'plugin:dsh-mood-changes') return;
 
     const text = textOf(msg);
     if (!text.trim()) return;
@@ -491,7 +491,7 @@ export function apply(ctx, config) {
     try {
       result = await judge.judge(roundText, priorWindow, fallbackText);
     } catch (e) {
-      ctx.logger?.warn?.('[dsh-mood] judge error:', e);
+      ctx.logger?.warn?.('[dsh-mood-changes] judge error:', e);
       return;
     }
     if (!result) return;
@@ -640,7 +640,7 @@ export function apply(ctx, config) {
         return;
       }
     } catch (e) {
-      ctx.logger?.warn?.('[dsh-mood] session/event error:', e);
+      ctx.logger?.warn?.('[dsh-mood-changes] session/event error:', e);
     }
   });
 
@@ -667,7 +667,7 @@ export function apply(ctx, config) {
     try {
       await tick(Date.now());
     } catch (e) {
-      ctx.logger?.warn?.('[dsh-mood] tick error:', e);
+      ctx.logger?.warn?.('[dsh-mood-changes] tick error:', e);
     }
   }, config.tickIntervalMs || 900000);
 
@@ -681,7 +681,7 @@ export function apply(ctx, config) {
     };
     toolDisposers = registerTools(ctx, store, baselineRef, () => state, saveNow);
   } catch (e) {
-    ctx.logger?.warn?.('[dsh-mood] tool registration error:', e);
+    ctx.logger?.warn?.('[dsh-mood-changes] tool registration error:', e);
   }
 
   // --- Register HTTP routes ---
@@ -689,7 +689,7 @@ export function apply(ctx, config) {
   try {
     routeDisposers = registerRoutes(ctx, store, baselineRef, () => state);
   } catch (e) {
-    ctx.logger?.warn?.('[dsh-mood] route registration error:', e);
+    ctx.logger?.warn?.('[dsh-mood-changes] route registration error:', e);
   }
 
   // --- Tools/result → boredom drop ---
@@ -730,9 +730,9 @@ export function apply(ctx, config) {
 
   // --- Init ---
   init().then(() => {
-    ctx.logger?.info?.('[dsh-mood] Initialized with worldDir:', worldDir);
+    ctx.logger?.info?.('[dsh-mood-changes] Initialized with worldDir:', worldDir);
   }).catch(e => {
-    ctx.logger?.warn?.('[dsh-mood] init error:', e);
+    ctx.logger?.warn?.('[dsh-mood-changes] init error:', e);
   });
 
   // --- Cleanup ---
