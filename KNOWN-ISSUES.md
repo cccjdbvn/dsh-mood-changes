@@ -43,7 +43,7 @@
 - empathy.js / empathy.json 删除，新建 lib/emotions.js
 - 三标记实现：closeOnly（亲近权重）、alsoMissing（孤独加思念）、skipDecay（轻快跳衰减）
 
-详见 HANDOVER.md §4。
+详见 `..\dsh-mood-private\HANDOVER.md` §4（交接文档已挪出仓库目录，不进 git）。
 
 ---
 
