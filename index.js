@@ -109,6 +109,8 @@ const DEFAULTS = {
   boredomCrossCooldownMinutes: 30,
   boredomRollFrom: 50,
   boredomDirectFrom: 80,
+  /** 主人在 QQ 私聊里的显示名（昵称）；群聊谁说话都不降思念。 */
+  ownerNames: [],
 }
 
 /** 乐的积分变换（参数稿附录，2026-11-18 下午换的）：F(0)=0，F'(0)=1/3，F(100)=∞。 */
@@ -705,6 +707,32 @@ export function apply(ctx, rawConfig = {}) {
     return false
   }
 
+  /** 消息正文：content 可能是字符串，也可能是 QQ 桥那种分块数组。 */
+  function textOfMessage(message) {
+    const c = message?.content
+    if (typeof c === 'string') return c
+    if (Array.isArray(c)) return c.filter(b => b && b.type === 'text').map(b => b.text || '').join('')
+    return ''
+  }
+
+  /** 「主人说话」的判据（2026-11-23 修：别人发言不再扣思念）：
+   *  对话框直输一定是主人；QQ 桥只认**私聊**，且昵称在 ownerNames 里；
+   *  群聊里谁说话都不算——思念不降。无聊不受此限（有人说话就掉）。 */
+  function fromOwner(source, message) {
+    const kind = source?.kind
+    if (kind === 'user') return true
+    const fromBridge =
+      (typeof kind === 'string' && kind.startsWith('plugin:') && kind.includes('qq-bridge')) ||
+      (kind === 'plugin' && String(source?.plugin ?? '').includes('qq'))
+    if (!fromBridge) return false
+    const text = textOfMessage(message)
+    if (!text.startsWith('[QQ · 私聊]')) return false
+    const m = text.match(/^\[QQ · 私聊\]\s*([^：:]{1,40})[：:]/)
+    if (!m) return false
+    const names = Array.isArray(cfg.ownerNames) ? cfg.ownerNames.map((n) => String(n)) : []
+    return names.includes(m[1].trim())
+  }
+
   // ── 骰子 ────────────────────────────────────────────────────
 
   /** 记上一轮骰子的结果，给面板看：hit / miss。掷中就顺手记下「上次掷中」的时刻。 */
@@ -873,10 +901,13 @@ export function apply(ctx, rawConfig = {}) {
       try {
         const sessionId = resolveSessionId()
         if (!sessionId || session?.id !== sessionId) return
-        // 思念：只认对话框和 QQ 桥进来的话，共用一小时一次；本鲸发出去的话不扣。
+        // 无聊：有人说话就掉（不管是谁），思念：只有主人——对话框直输，
+        // 或 QQ 私聊且昵称在 ownerNames 里；群聊/别人的话不扣思念。
         if (event?.type === 'user/message' && fromHim(event.data?.source)) {
-          dropMissing()
           dropBoredom('你说话了', cfg.boredomTalkDropFactor, 'talk')
+          if (fromOwner(event.data?.source, event.data)) {
+            dropMissing()
+          }
           return
         }
         // 无聊：她真的动过手就算一次，不管这一轮是谁起的；

@@ -1,6 +1,6 @@
 {
   "name": "dsh-mood-changes",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "Mood changes：把思念、六情和无聊记成一条随时间走的状态，输入框下面一枚药丸写着此刻。只报状态，不替人开口。",
   "type": "module",
   "main": "index.js",

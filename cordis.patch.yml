@@ -3,7 +3,10 @@
 # 什么都不配 = 状态存在 <DSH_HOME>/mood，不接世界：只显示状态、不往会话里注入。
 # 接了世界就加一个 worldId（比如 worldId: lian），房间和 life.json 自动推到
 #   <DSH_HOME>/worlds/<worldId>/room 和 <DSH_HOME>/worlds/<worldId>/life.json
+# ownerNames：主人在 QQ 私聊里的昵称。填了之后只有主人说话才扣思念；
+#   群聊里谁说话都不扣。对话框直接输入的永远算主人。
 - insert:
     - id: dsh-mood-changes
       name: dsh-mood-changes
-      config: {}
+      config:
+        ownerNames: []
