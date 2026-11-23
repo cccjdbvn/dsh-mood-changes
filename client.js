@@ -196,8 +196,8 @@ window.__ModuleLoader__.load({
               // Missing / boredom: same bar style, visually separated from the
               // six affects (no baseline concept, zero is their "normal").
               h('div', { style: { borderTop: '1px solid var(--dsw-alias-border, #4b5563)', margin: '10px 0 8px', paddingTop: 6, fontSize: 11, color: 'var(--dsw-alias-text-secondary, #9ca3af)', letterSpacing: 1 } }, '思念 / 无聊'),
-              h(EmotionBar, { key: 'missing', base: 'missing', label: '思', value: state.missing?.value || 0, color: '#ec4899' }),
-              h(EmotionBar, { key: 'boredom', base: 'boredom', label: '闲', value: state.boredom?.value || 0, color: '#94a3b8' }),
+              h(EmotionBar, { key: 'missing', base: 'missing', label: '思念', value: state.missing?.value || 0, color: '#ec4899' }),
+              h(EmotionBar, { key: 'boredom', base: 'boredom', label: '无聊', value: state.boredom?.value || 0, color: '#94a3b8' }),
               activeStates.length > 0 ? h('div', { style: { borderTop: '1px solid var(--dsw-alias-border, #4b5563)', paddingTop: 8, marginTop: 8 } },
                 h('div', { style: { fontSize: 12, fontWeight: 600, marginBottom: 4 } }, '激活状态'),
                 ...activeStates.map(x =>
