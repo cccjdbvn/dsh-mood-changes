@@ -21,6 +21,7 @@ export const Config = Schema.object({
   judgeTemperature: Schema.number().default(0.3).description('判官采样温度'),
   tickIntervalMs: Schema.number().default(900000).description('tick 间隔（毫秒，默认 15 分钟）'),
   ownerNames: Schema.array(Schema.string()).default([]).description('主人在 QQ 消息里的显示名；群聊一律不降思念，私聊且名字在列表里才降'),
+  targetSessionId: Schema.string().default('').description('只认这个会话的消息流（她的会话 id）；留空 = 所有会话都算她的（工作会话会被误入账）'),
 });
 
 /** Extract plain text from a message whose content may be a string or blocks. */
@@ -575,6 +576,9 @@ export function apply(ctx, config) {
     try {
       const sessionId = session?.id;
       if (!sessionId || !event || typeof event.type !== 'string') return;
+      // Only ONE session is "her": with targetSessionId set, everything else
+      // (work sessions, tooling sessions) stays out of her mood ledger.
+      if (config.targetSessionId && sessionId !== config.targetSessionId) return;
       const now = Date.now();
 
       if (event.type === 'user/message') {
