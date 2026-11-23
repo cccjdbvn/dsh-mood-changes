@@ -1,6 +1,6 @@
 {
   "name": "dsh-mood",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "DSH plugin: six-affect emotional pool with empathy conversion, coupling propagation, and daily audit logs",
   "license": "MIT",
   "type": "module",

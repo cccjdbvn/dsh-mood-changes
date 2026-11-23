@@ -141,24 +141,50 @@ export function apply(ctx, config) {
   }
 
   /**
-   * Settlement: apply queued deltas to the pool, then run event propagation
-   * for exactly these entries (A6). Shared by tick() and immediate
-   * settlement. Does NOT decay and does NOT touch lastTickAt.
+   * Settlement: apply queued deltas to the pool, run event propagation, and
+   * write the MAIN log rows here — at settlement time (A7): one log row per
+   * real deposit, with 时间 = record time (judge) and 生效 = settlement time
+   * (decay start). The log never claims a delta that never landed.
+   * Does NOT decay and does NOT touch lastTickAt.
    */
   function settleEntries(entries, now) {
     if (!entries || entries.length === 0) return;
     const mods = States.compositeMod(state.states);
-    const propLog = [];
+    const logBatch = [];
 
     for (const entry of entries) {
-      for (const d of entry.deltas || []) {
+      const deltas = entry.deltas || [];
+      for (const d of deltas) {
+        const before = state.values[d.base] ?? 0;
         MoodPool.apply(state.values, d.base, d.delta, d.cap);
+        const actual = Math.round(((state.values[d.base] ?? 0) - before) * 10) / 10;
+        // Main row: record time = entry.ts, effective = now, change = actual.
+        logBatch.push({
+          ts: entry.ts,
+          effectiveAt: now,
+          block: MoodLog.blockForBase(d.base),
+          emotion: entry.label || '',
+          delta: actual,
+          origDelta: d.origDelta,
+          reason: entry.reason || '',
+          stateNote: d.stateNote || '—'
+        });
+        // Summary bookkeeping rides with real deposits (main entries only).
+        summary.count += 1;
+        if (Math.abs(actual) > 20) {
+          summary.big.push({
+            label: entry.label || '',
+            delta: actual,
+            reason: (entry.reason || '').slice(0, 10)
+          });
+        }
       }
-      for (const d of entry.deltas || []) {
+      for (const d of deltas) {
         const propagated = Coupling.propagate(state.values, d.base, d.delta, mods);
         for (const p of propagated) {
-          propLog.push({
-            ts: now, block: MoodLog.blockForBase(p.base),
+          logBatch.push({
+            ts: now, effectiveAt: now,
+            block: MoodLog.blockForBase(p.base),
             emotion: '传播',
             delta: p.delta,
             reason: `由 ${MoodLog.blockForBase(p.parent)} 传播`,
@@ -169,7 +195,7 @@ export function apply(ctx, config) {
     }
 
     MoodPool.clamp(state.values);
-    if (propLog.length) fireAndForget(log.appendBatch(propLog));
+    if (logBatch.length) fireAndForget(log.appendBatch(logBatch));
   }
 
   // --- Knock (掷骰敲门): missing / boredom ask to interact ---
@@ -349,44 +375,26 @@ export function apply(ctx, config) {
         const deltas = MoodPool.calculateWeighted(herWeights, score, herCap);
         if (deltas.length === 0) continue;
 
-        // A5: multiply by the composite state modifiers AT JUDGE TIME.
+        // A5: multiply by the composite state modifiers AT JUDGE TIME,
+        // plus 待办5③: 「护着」 adds anger ×1.1 only for about='other'.
         const mods = States.compositeMod(state.states);
         const activeStateNote = States.formatActive(state.states);
         const herLabel = await empathy.labelFor(herResult.key);
         const adjusted = deltas.map(d => {
-          const factor = mods[d.base] ?? 1;
+          const factor = (mods[d.base] ?? 1) * States.protectionFactor(state.states, about, d.base);
           return {
             base: d.base,
             delta: Math.round(d.delta * factor * 10) / 10,
             cap: herCap, // A4: carry the per-emotion cap into the queue
-            origDelta: factor !== 1 ? d.delta : undefined
+            origDelta: factor !== 1 ? d.delta : undefined,
+            stateNote: factor !== 1
+              ? `${activeStateNote} ×${factor.toFixed(1)}`
+              : '—'
           };
         });
 
-        // Main-entry log rows: effective value (+ original when modified)
-        for (const a of adjusted) {
-          logBatch.push({
-            ts: now, block: MoodLog.blockForBase(a.base),
-            emotion: `${herLabel} ${herResult.key}`,
-            delta: a.delta,
-            origDelta: a.origDelta,
-            reason: (hisEmotion.evidence || text).slice(0, 70),
-            stateNote: a.origDelta !== undefined
-              ? `${activeStateNote} ×${(mods[a.base]).toFixed(1)}`
-              : '—'
-          });
-          // Summary bookkeeping: main entries only.
-          summary.count += 1;
-          if (Math.abs(a.delta) > 20) {
-            summary.big.push({
-              label: herLabel,
-              delta: a.delta,
-              reason: (hisEmotion.evidence || text).slice(0, 10)
-            });
-          }
-        }
-
-        // State trigger (activation affects later entries only).
+        // State trigger (activation affects later entries only). Logged
+        // immediately — activation takes effect at once, no decay concept.
         const stateDef = await empathy.stateFor(herResult.key);
         if (stateDef) {
           if (stateDef.when === 'fromUser' && !isOwner) continue;
@@ -402,7 +410,14 @@ export function apply(ctx, config) {
 
         if (score > 20) strongTrigger = true;
 
-        newEntries.push({ deltas: adjusted, ts: now });
+        // A7: the main rows are written at SETTLEMENT (settleEntries), with
+        // record time + effective time. Here we only queue the context.
+        newEntries.push({
+          deltas: adjusted,
+          ts: now,
+          label: `${herLabel} ${herResult.key}`,
+          reason: (hisEmotion.evidence || text).slice(0, 70)
+        });
       }
 
       if (newEntries.length > 0) {
@@ -454,7 +469,12 @@ export function apply(ctx, config) {
   // --- Register tools ---
   let toolDisposers = [];
   try {
-    toolDisposers = registerTools(ctx, store, baselineRef, () => state);
+    const saveNow = async () => {
+      stateDirty = false;
+      lastStateSaveAt = Date.now();
+      await store.saveState(state);
+    };
+    toolDisposers = registerTools(ctx, store, baselineRef, () => state, saveNow);
   } catch (e) {
     ctx.logger?.warn?.('[dsh-mood] tool registration error:', e);
   }
