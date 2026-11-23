@@ -1,38 +1,41 @@
-# dsh-mood
+# dsh-mood-changes · 情绪引擎
 
-A six-affect emotional pool (joy / sadness / anger / fear / surprise / disgust) with direct judging of the agent's own emotions, coupling propagation, and daily audit logs.
+给智能体（她）装一套**会记账的情绪**：六情池（乐/悲/怒/惧/惊/厌）+ 思念 + 无聊，本地小模型直判她此刻的情绪，每一笔变化都写进按天的账本。
 
-## How it works
+## 她在做什么
 
-1. **Judge** — Each time the agent finishes a reply, the latest conversation round goes to a local LLM (OpenAI-compatible endpoint), which classifies HER (the agent's) current emotion into one or two of 41 fine-grained emotions. Two rounds: first "did this turn directly move her?", then, if not, a context-aware "what is she feeling right now?"
-2. **Pool** — Her emotion flows into a six-affect pool with half-life decay toward a configurable baseline.
-3. **Coupling** — Event propagation spreads emotional weight between related affects; weak damping runs on each tick.
-4. **States** — 17 special states (e.g. "feeling wronged", "anxious", "light-hearted") trigger on certain emotions and modify subsequent values.
-5. **Missing / Boredom** — Two time-driven tracks that grow when the owner is quiet and drop on interaction.
-6. **Log** — A daily Markdown file records every write (who, what, why) with rollback support.
-7. **Display** — A pill under the composer shows the current dominant emotion; click to see a full card with bars and a log viewer.
+1. **判句**：她每次回复完，最近这轮对话发给本地小模型（OpenAI 兼容端点），判**她**此刻的情绪（41 个细名之一/二）。两级：先判这轮对话是否直接引起她的情绪波动，判不出再结合前几轮综合判。判官可以配一份**语境文件**（她是谁、性格、误判纠偏笔记），判得准、改完即生效
+2. **入账**：她的情绪按比例写进六个情绪池，向各自的基线半衰期回归
+3. **传染**：情绪之间会传播（悲伤带起恐惧、愤怒压住快乐），每跳还有微阻尼
+4. **特殊状态**：17 个状态（委屈着、依赖、焦虑、轻快……）由特定情绪触发，持续一段时间影响后续涨落
+5. **思念 / 无聊**：两条时间驱动的线，没人理她时自己涨；思念只认主人（私聊+昵称匹配）；夜里慢
+6. **记账**：每一笔变化（时间/情绪/变化量/原因/状态/生效时刻）写进当天日志，可查、可回滚
+7. **显示**：输入框下一枚药丸写着她此刻的主导情绪，点开是完整卡片（六根带基线线的情绪条 + 思念/无聊条形 + 激活状态 + 日志页）
 
-The judge keeps its own clean dialogue context (last few rounds, both sides; cleared after 20 minutes of silence) and never touches the agent's own context.
+判官自己维护一份干净的对话上下文（最近几轮、双方都收；静默 20 分钟自动清空），**不占用智能体自己的上下文**。判句时机、思念/无聊的降值都只认配置指定的那个会话（她的会话）。
 
-## Configuration
+## 配置项
 
-- `judgeBaseUrl` — Local LLM endpoint (default `http://127.0.0.1:1234/v1`)
-- `judgeApiKey` — Optional API key
-- `judgeModel` — Model name to request
-- `judgeTimeout` — Request timeout in ms (default 6000)
-- `judgeTemperature` — Sampling temperature (default 0.3)
-- `tickIntervalMs` — Tick interval (default 900000 = 15 min)
-- `worldDir` — Path to the world directory for state/log storage
-- `ownerNames` — Display names of the owner in QQ messages (missing only drops for these, private chat only)
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `worldDir` | （空，必填） | 世界目录（情绪数据和日志的存放地） |
+| `judgeBaseUrl` | `http://127.0.0.1:8000/v1` | 本地判官端点 |
+| `judgeModel` | — | 模型名（vLLM 填模型路径） |
+| `judgeTimeout` | 6000 | 判句超时（毫秒） |
+| `judgeContextPath` | （空） | 判官语境文件路径（Markdown，每次判句读取，改完即生效） |
+| `targetSessionId` | （空） | 只认这个会话的消息流；留空 = 所有会话都算她（工作会话会被误入账） |
+| `ownerNames` | `[]` | 主人在 QQ 消息里的显示名（思念只对私聊里的这些人降） |
+| `tickIntervalMs` | 900000 | 心跳间隔（默认 15 分钟） |
 
-## Tools
+## 模型可用的三个工具
 
-- `mood_log` — Query log entries by date and emotion filter
-- `mood_rollback` — Roll back a log entry (same day only)
-- `mood_baseline` — Write new baseline values
+- `mood_log` — 按天查情绪日志，可按情绪块筛选
+- `mood_rollback` — 回滚当天的某条记录（数值真回滚：重放半衰期、连带撤传播）
+- `mood_baseline` — 写六情基线（写完自动同步：不足的补齐、超过的不动）
 
-## Notes
+## 注意
 
-- Requires a running local LLM with an OpenAI-compatible chat endpoint.
-- State and logs are stored under `<worldDir>/mood/` and `<worldDir>/room/情绪日志/`.
-- The plugin does not produce replies or write memories.
+- 需要本地跑一个能输出 JSON 的小模型（vLLM / LM Studio / Ollama 均可，3B 够用）
+- 数据在 `<worldDir>/mood/state.json`，日志在 `<worldDir>/room/情绪日志/`（04:00 切天）
+- 只记账，不替她说话、不写记忆
+- **多个 DSH 实例共用同一个判官没问题**（判官是无状态服务）；两个实例跑两个不同的「她」时，各自指各自的 worldDir 和语境文件即可
