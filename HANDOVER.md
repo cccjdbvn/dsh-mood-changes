@@ -20,8 +20,8 @@
 | `F:\DSH\work\plugins\dsh-mood-changes` | **v1 分支检出（0.1.8）** | profile 的 link 指向它——**DSH 里跑的旧版**。注意它也是 git 仓库本体 |
 | `F:\DSH\work\plugins\dsh-mood-main` | **main 分支检出**（`git worktree`） | v2 进 git 的通道：改完 dsh-mood 后 robocopy 过来 commit（**必须排除 node_modules**） |
 
-**v2 同步进 git 的流程**：改 `dsh-mood` → `robocopy F:\DSH\work\plugins\dsh-mood F:\DSH\work\plugins\dsh-mood-main /MIR /XD node_modules` → 在 dsh-mood-main 里 `git add -A && git commit` → push origin main。
-（**别用 Copy-Item -Recurse**：node_modules 是 junction，会被展开复制。）
+**v2 同步进 git 的流程**：改 `dsh-mood` → `robocopy F:\DSH\work\plugins\dsh-mood F:\DSH\work\plugins\dsh-mood-main /MIR /XD node_modules /XF .git` → 在 dsh-mood-main 里 `git add -A && git commit` → push origin main。
+（**别用 Copy-Item -Recurse**：node_modules 是 junction，会被展开复制；**robocopy 必须带 `/XF .git`**——dsh-mood-main 的 .git 是 74 字节的 worktree 指针文件，/MIR 会当多余文件删掉。真删了也别慌：重建一个内容为 `gitdir: F:/DSH/work/plugins/dsh-mood-changes/.git/worktrees/dsh-mood-main` 的 .git 文件即可恢复。）
 
 GitHub：https://github.com/cccjdbvn/dsh-mood-changes
 - `main` = 0.2.2 ✅（本会话已推）

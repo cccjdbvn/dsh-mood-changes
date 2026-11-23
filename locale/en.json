@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Mood engine",
-    "description": "A six-affect emotional pool with empathy, coupling, and a daily log. Judges every message through a local LLM and shows the current mood as a composer pill.",
+    "description": "A six-affect emotional pool with a local judge, coupling, and a daily log. Each time the agent replies, a local LLM decides her current emotion; the mood shows as a composer pill.",
     "detail": "docs/DETAIL.md"
   }
 }
