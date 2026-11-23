@@ -68,6 +68,10 @@ session/event 当前收所有 session 的消息进判官窗口（与 statusBars 
 
 `F:\ai\model_mood-judge\Qwen2.5-7B-AWQ` 下好未测；3B 判得准（hurt/shy/calm 都对），先不动。
 
+### fiber 重载数据热载不可靠（2026-11-23 深夜实测）
+
+disable→enable 后，`/dsh-mood-changes/state` 路由仍应答**旧 apply 闭包的冻结 state**（盘上已清 states、路由仍返回旧值）——HANDOVER 坑 5 的「数据文件不需要重启」在此场景不成立（路由/判句/工具闭包全部存疑）。手改 state.json 后**必须重启 DSH** 才保险。另：profile `cordis.patch.yml` 带 BOM 会卡死 plugin_manager 的 set 操作（YAML 解析报错），已剥 BOM（备份 `.bak-20261123`）；下次遇到同样报错先查文件头 EF BB BF。
+
 ---
 
 ## 2026-11-23 深夜：E1 传播回声（左脚踩右脚）
