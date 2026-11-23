@@ -89,15 +89,16 @@ window.__ModuleLoader__.load({
     }
 
     // ── bars ──
-    function EmotionBar({ base, value, baseline }) {
+    function EmotionBar({ base, value, baseline, label, color }) {
       const pct = Math.min(100, Math.max(0, value));
-      const color = BASE_COLORS[base] || '#6b7280';
+      const barColor = color || BASE_COLORS[base] || '#6b7280';
+      const barLabel = label || BASE_LABELS[base] || base;
       const bl = baseline == null ? null : Math.min(100, Math.max(0, baseline));
       return h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 } },
-        h('span', { style: { width: 16, fontSize: 12, textAlign: 'right', color: 'var(--dsw-alias-text-secondary, #9ca3af)' } }, BASE_LABELS[base]),
+        h('span', { style: { width: 16, fontSize: 12, textAlign: 'right', color: 'var(--dsw-alias-text-secondary, #9ca3af)' } }, barLabel),
         h('div', { style: { flex: 1, height: 14, background: 'var(--dsw-alias-bg-tertiary, #374151)', borderRadius: 4, position: 'relative', overflow: 'hidden' } },
           h('div', {
-            style: { width: pct + '%', height: '100%', background: color, borderRadius: 4, transition: 'width 0.3s ease' }
+            style: { width: pct + '%', height: '100%', background: barColor, borderRadius: 4, transition: 'width 0.3s ease' }
           }),
           // Baseline mark: thin vertical line showing where "normal" is.
           bl != null ? h('div', {
@@ -192,11 +193,12 @@ window.__ModuleLoader__.load({
               ...BASE_ORDER.map(base =>
                 h(EmotionBar, { key: base, base, value: state.values[base] || 0, baseline: state.baseline?.[base] })
               ),
-              state.missing ? h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginTop: 8, marginBottom: 4 } },
-                `思念：${(state.missing.value || 0).toFixed(1)}`) : null,
-              state.boredom ? h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginBottom: 8 } },
-                `无聊：${(state.boredom.value || 0).toFixed(1)}`) : null,
-              activeStates.length > 0 ? h('div', { style: { borderTop: '1px solid var(--dsw-alias-border, #4b5563)', paddingTop: 8 } },
+              // Missing / boredom: same bar style, visually separated from the
+              // six affects (no baseline concept, zero is their "normal").
+              h('div', { style: { borderTop: '1px solid var(--dsw-alias-border, #4b5563)', margin: '10px 0 8px', paddingTop: 6, fontSize: 11, color: 'var(--dsw-alias-text-secondary, #9ca3af)', letterSpacing: 1 } }, '思念 / 无聊'),
+              h(EmotionBar, { key: 'missing', base: 'missing', label: '思', value: state.missing?.value || 0, color: '#ec4899' }),
+              h(EmotionBar, { key: 'boredom', base: 'boredom', label: '闲', value: state.boredom?.value || 0, color: '#94a3b8' }),
+              activeStates.length > 0 ? h('div', { style: { borderTop: '1px solid var(--dsw-alias-border, #4b5563)', paddingTop: 8, marginTop: 8 } },
                 h('div', { style: { fontSize: 12, fontWeight: 600, marginBottom: 4 } }, '激活状态'),
                 ...activeStates.map(x =>
                   h('div', { key: x.name, style: { fontSize: 12, color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginBottom: 2 } },
