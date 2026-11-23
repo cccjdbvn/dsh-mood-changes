@@ -27,10 +27,26 @@ window.__ModuleLoader__.load({
     function useShared() {
       const [, force] = useState(0);
       useEffect(() => {
-        shared.subs.add(force);
-        return () => { shared.subs.delete(force); };
+        // BUG FIX: store an updater, not the bare setState. Calling a bare
+        // setter with no argument queues setState(undefined); after the
+        // first render that is shallow-equal to the previous state, so
+        // notify() silently stopped re-rendering — the card could open but
+        // never close.
+        const fn = () => force(x => x + 1);
+        shared.subs.add(fn);
+        return () => { shared.subs.delete(fn); };
       }, []);
       return shared;
+    }
+
+    async function fetchState() {
+      try {
+        const resp = await fetch('/api/mood/state');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        shared.data = data;
+        notify();
+      } catch (e) { /* server may not be ready */ }
     }
 
     // ── pill (conversation.composer.dock) ──
@@ -45,7 +61,12 @@ window.__ModuleLoader__.load({
       const hasState = activeStates.length > 0;
 
       return h('button', {
-        onClick: () => { shared.cardOpen = true; notify(); },
+        onClick: () => {
+          shared.cardOpen = true;
+          notify();
+          // Open should not wait for the 30s poll: fetch NOW.
+          fetchState();
+        },
         style: {
           display: 'inline-flex', alignItems: 'center', gap: 4,
           padding: '2px 8px', borderRadius: 12, border: `1.5px solid ${bg}`,
@@ -230,19 +251,10 @@ window.__ModuleLoader__.load({
       inject: ['slots'],
       apply(ctx) {
         // One poll feeding the shared store; both slots subscribe.
-        const timer = setInterval(async () => {
-          try {
-            const resp = await fetch('/api/mood/state');
-            if (!resp.ok) return;
-            shared.data = await resp.json();
-            notify();
-          } catch (e) { /* server may not be ready */ }
-        }, 30000);
+        const timer = setInterval(fetchState, 30000);
 
         // Immediate first fetch.
-        fetch('/api/mood/state').then(r => r.ok ? r.json() : null)
-          .then(d => { if (d) { shared.data = d; notify(); } })
-          .catch(() => {});
+        fetchState();
 
         ctx.effect(() => () => clearInterval(timer), 'dsh-mood: poll');
 
