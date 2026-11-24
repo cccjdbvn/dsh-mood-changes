@@ -1,6 +1,6 @@
 {
   "name": "dsh-mood-changes",
-  "version": "0.2.18",
+  "version": "0.2.19",
   "description": "情绪引擎：本地小模型直判她此刻的情绪，六情池记账、思念无聊随时间走，输入框下一枚药丸写着她此刻的样子",
   "license": "MIT",
   "type": "module",
