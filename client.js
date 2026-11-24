@@ -318,22 +318,41 @@ window.__ModuleLoader__.load({
       cursor: 'pointer', fontFamily: 'inherit',
     };
 
-    function SettingsField({ field, value, onChange }) {
+    function SettingsInput({ label, value, onChange, description }) {
       return h('div', { style: { marginBottom: 10 } },
-        h('div', { style: { marginBottom: 3 } }, field.label),
+        h('div', { style: { marginBottom: 3 } }, label),
         h('input', {
           value: value ?? '',
           onChange: e => onChange(e.target.value),
           style: settingsInputStyle,
         }),
-        field.description
-          ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginTop: 2 } }, field.description)
+        description
+          ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginTop: 2 } }, description)
           : null,
       );
     }
 
     const BASE_NAMES = { happy: '乐', sad: '悲', fear: '惧', anger: '怒', surprise: '惊', disgust: '厌' };
     const SETTINGS_BASE_ORDER = ['happy', 'sad', 'fear', 'anger', 'surprise', 'disgust'];
+
+    // 设置页分块（E21，2026-11-24 用户需求）：照世界控制台的卡片墙——每一类一张卡片，
+    // 点进去单独改、单独保存；不再把所有字段平铺成一张长表单。
+    const SETTINGS_SECTIONS = [
+      { id: 'config', title: '插件配置' },
+      { id: 'growth', title: '增速' },
+      { id: 'decay', title: '衰减' },
+      { id: 'cooldown', title: '冷却' },
+      { id: 'night', title: '夜间' },
+      { id: 'baseline', title: '情绪基线' },
+    ];
+    const TUNING_GROUP_BY_ID = { growth: '增速', decay: '衰减', cooldown: '冷却', night: '夜间' };
+
+    const settingsCardStyle = {
+      background: 'var(--dsw-alias-bg-secondary, rgba(255,255,255,0.03))',
+      border: '1px solid var(--dsw-alias-border, #4b5563)',
+      borderRadius: 10, padding: '12px 14px', cursor: 'pointer',
+      display: 'flex', flexDirection: 'column', gap: 6, minHeight: 84, boxSizing: 'border-box',
+    };
 
     function MoodSettingsTab() {
       const [config, setConfig] = useState(null);
@@ -345,6 +364,7 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('');
       const [notice, setNotice] = useState('');
       const [busy, setBusy] = useState('');
+      const [view, setView] = useState('home');
 
       const loadAll = useCallback(async () => {
         setError('');
@@ -416,17 +436,17 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const saveTuning = async () => {
+      const saveTuningGroup = async (group) => {
         if (!tuning) return;
         const set = {};
-        for (const field of tuning.fields) {
+        for (const field of tuning.fields.filter(f => f.group === group)) {
           const text = String(tuningDraft[field.path] ?? '').trim();
           if (text === '') { setError(`${field.label} 不能为空`); return; }
           const value = Number(text);
           if (!Number.isFinite(value)) { setError(`${field.label} 必须是数字`); return; }
           if (value !== Number(tuning.values[field.path])) set[field.path] = value;
         }
-        if (Object.keys(set).length === 0) { setNotice('运行参数没有改动'); return; }
+        if (Object.keys(set).length === 0) { setNotice('没有改动'); return; }
         setBusy('tuning');
         setError('');
         setNotice('');
@@ -442,7 +462,7 @@ window.__ModuleLoader__.load({
           const td = {};
           for (const field of body.fields) td[field.path] = String(body.values[field.path] ?? '');
           setTuningDraft(td);
-          setNotice('运行参数已保存，下一跳 tick 起生效');
+          setNotice('已保存，下一跳 tick 起生效');
         } catch (e) {
           setError(String(e?.message || e));
         } finally {
@@ -478,70 +498,114 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const sectionTitle = { fontSize: 12, fontWeight: 600, margin: '14px 0 6px', paddingTop: 8, borderTop: '1px solid var(--dsw-alias-border, #4b5563)' };
-      const subTitle = { fontSize: 11, color: 'var(--dsw-alias-text-secondary, #9ca3af)', margin: '6px 0 4px', letterSpacing: 1 };
-      const groups = tuning ? [...new Set(tuning.fields.map(f => f.group))] : [];
+      const saveSection = (id) => {
+        if (id === 'config') return saveConfig();
+        if (id === 'baseline') return saveBaseline();
+        return saveTuningGroup(TUNING_GROUP_BY_ID[id]);
+      };
+
+      // 卡片上的摘要：一眼看到这一类的现状。
+      const summaryOf = (id) => {
+        if (!config || !tuning || !baseline) return '读取中…';
+        if (id === 'config') {
+          const model = config.values.judgeModel || '未配判官模型';
+          const home = config.values.targetWorkspaceDir
+            ? '按目录认家'
+            : (config.values.targetSessionId ? '按会话 id 认家' : '所有会话都算');
+          return `${model}\n${home}`;
+        }
+        if (id === 'growth') {
+          return `思念 ${tuning.values['missing.baseGrowth']} /跳\n无聊 ${tuning.values['boredom.baseGrowth']} /跳`;
+        }
+        if (id === 'decay') {
+          return `思念 ×${tuning.values['missing.dropFactor']}\n消息 ×${tuning.values['boredom.msgFactor']} · 工具 ×${tuning.values['boredom.toolFactor']}`;
+        }
+        if (id === 'cooldown') {
+          return `思念降值 ${tuning.values['missing.dropCooldownMs']} 分\n同类型 ${tuning.values['boredom.sameTypeCooldownMs']} 分 · 跨类型 ${tuning.values['boredom.crossTypeCooldownMs']} 分`;
+        }
+        if (id === 'night') {
+          return `${tuning.values['night.startHour']}:00 – ${tuning.values['night.endHour']}:00\n夜间不涨无聊、不掷骰、思念减速`;
+        }
+        if (id === 'baseline') {
+          return SETTINGS_BASE_ORDER.map(key => `${BASE_NAMES[key]} ${baseline.values[key]}`).join(' · ');
+        }
+        return '';
+      };
+
+      const fieldsFor = (id) => {
+        if (id === 'config') {
+          return config.fields.map(field => h(SettingsInput, {
+            key: field.key,
+            label: field.label,
+            value: configDraft[field.key] ?? '',
+            description: field.description,
+            onChange: (text) => setConfigDraft(prev => ({ ...prev, [field.key]: text })),
+          }));
+        }
+        if (id === 'baseline') {
+          return [h('div', { key: 'baseline-grid', style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 } },
+            ...SETTINGS_BASE_ORDER.map(key => h('div', { key },
+              h('div', { style: { marginBottom: 2 } }, BASE_NAMES[key]),
+              h('input', {
+                value: baselineDraft[key] ?? '',
+                onChange: e => setBaselineDraft(prev => ({ ...prev, [key]: e.target.value })),
+                style: settingsInputStyle,
+              }),
+            )),
+          )];
+        }
+        const group = TUNING_GROUP_BY_ID[id];
+        return tuning.fields.filter(field => field.group === group).map(field => h(SettingsInput, {
+          key: field.path,
+          label: field.label,
+          value: tuningDraft[field.path] ?? '',
+          description: field.description,
+          onChange: (text) => setTuningDraft(prev => ({ ...prev, [field.path]: text })),
+        }));
+      };
+
+      const title = SETTINGS_SECTIONS.find(section => section.id === view)?.title || '情绪插件';
+      const cardTitleStyle = { fontSize: 13, fontWeight: 600, paddingBottom: 4, marginBottom: 2, borderBottom: '1px dashed var(--dsw-alias-border, #4b5563)' };
 
       return h('div', { style: { padding: '4px 2px', fontSize: 12 } },
-        h('div', { style: { fontSize: 13, fontWeight: 600, marginBottom: 6 } }, '情绪插件'),
-        h('div', { style: { color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginBottom: 10, lineHeight: 1.5 } },
-          '插件配置保存后插件会重载；运行参数和基线保存即生效。留空 = 用默认值。'
-        ),
         error ? h('div', { style: { color: '#f87171', marginBottom: 8 } }, error) : null,
         !config || !tuning || !baseline
           ? h('div', { style: { color: 'var(--dsw-alias-text-secondary, #9ca3af)' } }, '读取中…')
-          : h('div', null,
-              // ── 插件配置 ──
-              h('div', { style: { fontSize: 12, fontWeight: 600, margin: '4px 0 8px' } }, '插件配置'),
-              ...config.fields.map(field => h(SettingsField, {
-                key: field.key,
-                field,
-                value: configDraft[field.key] ?? '',
-                onChange: (text) => setConfigDraft(prev => ({ ...prev, [field.key]: text })),
-              })),
-              h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 } },
-                h('button', { onClick: saveConfig, disabled: busy === 'config', style: settingsButtonStyle }, busy === 'config' ? '保存中…' : '保存插件配置'),
-                h('button', { onClick: loadAll, disabled: Boolean(busy), style: settingsButtonStyle }, '重新读取'),
+          : view === 'home'
+            ? h('div', null,
+                h('div', { style: { fontSize: 13, fontWeight: 600, marginBottom: 4 } }, '情绪插件'),
+                h('div', { style: { color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginBottom: 12, lineHeight: 1.5 } },
+                  '点一张卡片进入，逐类单独改。运行参数和基线保存即生效；插件配置保存后插件重载。'
+                ),
+                h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 } },
+                  ...SETTINGS_SECTIONS.map(section => h('div', {
+                    key: section.id,
+                    onClick: () => { setError(''); setNotice(''); setView(section.id); },
+                    style: settingsCardStyle,
+                  },
+                    h('div', { style: cardTitleStyle }, `— ${section.title}`),
+                    h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-text-secondary, #9ca3af)', lineHeight: 1.6, whiteSpace: 'pre-line' } },
+                      summaryOf(section.id)),
+                  )),
+                ),
+              )
+            : h('div', null,
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } },
+                  h('button', { onClick: () => { setError(''); setNotice(''); setView('home'); }, style: settingsButtonStyle }, '← 返回'),
+                  h('span', { style: { fontSize: 13, fontWeight: 600 } }, title),
+                  view === 'config' && config.editable === false
+                    ? h('span', { style: { color: '#fbbf24', fontSize: 11 } }, '这个 profile 只能看不能改')
+                    : null,
+                ),
+                ...fieldsFor(view),
+                h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 10 } },
+                  h('button', { onClick: () => saveSection(view), disabled: Boolean(busy), style: settingsButtonStyle },
+                    busy ? '保存中…' : '保存'),
+                  notice ? h('span', { style: { color: 'var(--dsw-alias-text-secondary, #9ca3af)' } }, notice) : null,
+                ),
               ),
-              config.editable === false
-                ? h('div', { style: { color: '#fbbf24', marginTop: 6 } }, '当前 profile 里写不了插件配置（configEditor 不可用），这里只能看不能改。')
-                : null,
-
-              // ── 运行参数（按增速 / 衰减 / 冷却 / 夜间分块） ──
-              h('div', { style: sectionTitle }, '运行参数'),
-              ...groups.map(group => h('div', { key: group },
-                h('div', { style: subTitle }, group),
-                ...tuning.fields.filter(field => field.group === group).map(field => h(SettingsField, {
-                  key: field.path,
-                  field,
-                  value: tuningDraft[field.path] ?? '',
-                  onChange: (text) => setTuningDraft(prev => ({ ...prev, [field.path]: text })),
-                })),
-              )),
-              h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 } },
-                h('button', { onClick: saveTuning, disabled: busy === 'tuning', style: settingsButtonStyle }, busy === 'tuning' ? '保存中…' : '保存运行参数'),
-              ),
-
-              // ── 情绪基线 ──
-              h('div', { style: sectionTitle }, '情绪基线'),
-              h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 } },
-                ...SETTINGS_BASE_ORDER.map(key => h('div', { key },
-                  h('div', { style: { marginBottom: 2 } }, BASE_NAMES[key]),
-                  h('input', {
-                    value: baselineDraft[key] ?? '',
-                    onChange: e => setBaselineDraft(prev => ({ ...prev, [key]: e.target.value })),
-                    style: settingsInputStyle,
-                  }),
-                )),
-              ),
-              h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
-                h('button', { onClick: saveBaseline, disabled: busy === 'baseline', style: settingsButtonStyle }, busy === 'baseline' ? '保存中…' : '保存基线'),
-                notice ? h('span', { style: { color: 'var(--dsw-alias-text-secondary, #9ca3af)' } }, notice) : null,
-              ),
-            ),
       );
     }
-
     return {
       inject: ['slots'],
       apply(ctx) {
