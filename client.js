@@ -285,7 +285,8 @@ window.__ModuleLoader__.load({
     // profile 的 cordis.patch.yml 里，客户端通过宿主半的
     // /dsh-mood-changes/config 读写；保存会让插件重载，所以保存完稍等再刷新。
     function fieldText(field, value) {
-      if (field.kind === 'list') return Array.isArray(value) ? value.join('，') : '';
+      // 列表显示成一行一个（textarea），保存时仍是数组，顺序不变。
+      if (field.kind === 'list') return Array.isArray(value) ? value.join('\n') : '';
       return value == null ? '' : String(value);
     }
 
@@ -297,7 +298,8 @@ window.__ModuleLoader__.load({
         return Number.isFinite(n) ? { blank: false, value: n } : { error: '必须是数字' };
       }
       if (field.kind === 'list') {
-        const list = String(text ?? '').split(/[,，]/).map(s => s.trim()).filter(Boolean);
+        // 换行为主，兼容旧的逗号分隔输入。
+        const list = String(text ?? '').split(/[\n,，]/).map(s => s.trim()).filter(Boolean);
         return { blank: list.length === 0, value: list };
       }
       const s = String(text ?? '');
@@ -309,29 +311,48 @@ window.__ModuleLoader__.load({
       background: 'var(--dsw-alias-bg-secondary, #374151)',
       color: 'var(--dsw-alias-text-primary, #d1d5db)',
       border: '1px solid var(--dsw-alias-border, #4b5563)',
-      borderRadius: 6, padding: '4px 8px', fontSize: 12, fontFamily: 'inherit',
+      borderRadius: 6, padding: '5px 9px', fontSize: 14, fontFamily: 'inherit',
     };
 
     const settingsButtonStyle = {
       background: 'none', border: '1px solid var(--dsw-alias-border, #4b5563)', borderRadius: 6,
-      color: 'var(--dsw-alias-text-primary, #d1d5db)', padding: '3px 12px', fontSize: 12,
+      color: 'var(--dsw-alias-text-primary, #d1d5db)', padding: '4px 14px', fontSize: 14,
       cursor: 'pointer', fontFamily: 'inherit',
     };
 
-    function SettingsInput({ label, value, onChange, description, accent }) {
+    function SettingsInput({ label, value, onChange, description, accent, kind }) {
       const inputStyle = accent
         ? { ...settingsInputStyle, borderColor: accent + '66', caretColor: accent }
         : settingsInputStyle;
-      return h('div', { style: { marginBottom: 10 } },
-        h('div', { style: { marginBottom: 3 } }, label),
-        h('input', {
-          value: value ?? '',
-          onChange: e => onChange(e.target.value),
-          style: inputStyle,
-        }),
-        description
-          ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginTop: 2 } }, description)
-          : null,
+      // 布局照 QQ 桥：左边名称、右边设置框，描述落在框下面。
+      return h('div', {
+        style: {
+          display: 'grid',
+          gridTemplateColumns: 'minmax(110px, 168px) 1fr',
+          gap: '6px 12px',
+          alignItems: 'start',
+          marginBottom: 12,
+        },
+      },
+        h('div', { style: { fontSize: 14, paddingTop: 5 } }, label),
+        h('div', null,
+          kind === 'list'
+            ? h('textarea', {
+                value: value ?? '',
+                onChange: e => onChange(e.target.value),
+                rows: 3,
+                placeholder: '一行一个',
+                style: { ...inputStyle, minHeight: 76, resize: 'vertical', lineHeight: 1.7 },
+              })
+            : h('input', {
+                value: value ?? '',
+                onChange: e => onChange(e.target.value),
+                style: inputStyle,
+              }),
+          description
+            ? h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginTop: 3, lineHeight: 1.5 } }, description)
+            : null,
+        ),
       );
     }
 
@@ -349,6 +370,15 @@ window.__ModuleLoader__.load({
       { id: 'baseline', title: '情绪基线', color: '#f472b6' },
     ];
     const TUNING_GROUP_BY_ID = { growth: '增速', decay: '衰减', cooldown: '冷却', night: '夜间' };
+
+    // 衰减再分章（E23，2026-11-24 用户需求）：像文章章节一样，六情一块、思念与无聊一块。
+    // 按字段 path 前缀划分：`mood.*` 是六情半衰期，`missing.*` / `boredom.*` 是思念与无聊。
+    const TUNING_SUBGROUPS = {
+      decay: [
+        { title: '六情衰减', match: field => field.path.startsWith('mood.') },
+        { title: '思念与无聊', match: field => !field.path.startsWith('mood.') },
+      ],
+    };
 
     function MoodSettingsTab() {
       const [config, setConfig] = useState(null);
@@ -505,6 +535,7 @@ window.__ModuleLoader__.load({
           return config.fields.map(field => h(SettingsInput, {
             key: field.key,
             label: field.label,
+            kind: field.kind,
             value: configDraft[field.key] ?? '',
             description: field.description,
             accent,
@@ -512,59 +543,82 @@ window.__ModuleLoader__.load({
           }));
         }
         if (id === 'baseline') {
-          return [h('div', { key: 'baseline-grid', style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 } },
-            ...SETTINGS_BASE_ORDER.map(key => h('div', { key },
-              h('div', { style: { marginBottom: 2 } }, BASE_NAMES[key]),
+          return [h('div', { key: 'baseline-grid', style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 18px' } },
+            ...SETTINGS_BASE_ORDER.map(key => h('div', { key, style: { display: 'flex', alignItems: 'center', gap: 10 } },
+              h('span', { style: { fontSize: 14, minWidth: 28 } }, BASE_NAMES[key]),
               h('input', {
                 value: baselineDraft[key] ?? '',
                 onChange: e => setBaselineDraft(prev => ({ ...prev, [key]: e.target.value })),
-                style: { ...settingsInputStyle, borderColor: accent + '66', caretColor: accent },
+                style: { ...settingsInputStyle, borderColor: accent + '66', caretColor: accent, flex: 1 },
               }),
             )),
           )];
         }
         const group = TUNING_GROUP_BY_ID[id];
-        return tuning.fields.filter(field => field.group === group).map(field => h(SettingsInput, {
+        const renderTuningField = (field) => h(SettingsInput, {
           key: field.path,
           label: field.label,
           value: tuningDraft[field.path] ?? '',
           description: field.description,
           accent,
           onChange: (text) => setTuningDraft(prev => ({ ...prev, [field.path]: text })),
-        }));
+        });
+        const groupFields = tuning.fields.filter(field => field.group === group);
+        const subgroups = TUNING_SUBGROUPS[id];
+        if (!subgroups) return groupFields.map(renderTuningField);
+        // 有子章节的类（目前只有「衰减」）：每个章节一个小标题 + 分隔线。
+        return subgroups.map((sub, index) => h('div', { key: sub.title },
+          h('div', {
+            style: {
+              fontSize: 14, fontWeight: 600,
+              margin: index === 0 ? '0 0 10px' : '20px 0 10px',
+              paddingBottom: 5,
+              borderBottom: '1px dashed var(--dsw-alias-border, #4b5563)',
+            },
+          }, `— ${sub.title}`),
+          ...groupFields.filter(sub.match).map(renderTuningField),
+        ));
       };
 
       const active = SETTINGS_SECTIONS.find(section => section.id === view) || SETTINGS_SECTIONS[0];
 
-      return h('div', { style: { padding: '4px 2px', fontSize: 12 } },
+      return h('div', { style: { padding: '4px 2px', fontSize: 14 } },
         error ? h('div', { style: { color: '#f87171', marginBottom: 8 } }, error) : null,
         !config || !tuning || !baseline
           ? h('div', { style: { color: 'var(--dsw-alias-text-secondary, #9ca3af)' } }, '读取中…')
           : h('div', null,
-              h('div', { style: { fontSize: 13, fontWeight: 600, marginBottom: 8 } }, '情绪插件'),
-              // 横向页签（E22，照世界控制台）：一行排开，当前类下划线用主题色。
+              h('div', { style: { fontSize: 16, fontWeight: 600, marginBottom: 10 } }, '情绪插件'),
+              // 横向页签（照世界控制台 / QQ 桥）：一行排开，激活项是「强调色描边 + 12% 淡底」的胶囊。
               h('div', {
                 style: {
-                  display: 'flex', gap: 20, marginBottom: 12, overflowX: 'auto',
-                  borderBottom: '1px solid var(--dsw-alias-border, #4b5563)',
+                  display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12,
+                  borderBottom: '1px solid var(--dsw-alias-border, #4b5563)', paddingBottom: 8,
                 },
               },
                 ...SETTINGS_SECTIONS.map(section => h('button', {
                   key: section.id,
                   onClick: () => { setError(''); setNotice(''); setView(section.id); },
-                  style: {
-                    background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-                    padding: '6px 2px', marginBottom: -1, fontSize: 12, whiteSpace: 'nowrap',
-                    color: view === section.id ? section.color : 'var(--dsw-alias-text-secondary, #9ca3af)',
-                    fontWeight: view === section.id ? 600 : 400,
-                    borderBottom: `2px solid ${view === section.id ? section.color : 'transparent'}`,
-                  },
+                  style: view === section.id
+                    ? {
+                        padding: '5px 12px', borderRadius: 999, cursor: 'pointer', fontFamily: 'inherit',
+                        fontSize: 14, outline: 'none', fontWeight: 600,
+                        border: `1px solid ${section.color}`,
+                        background: `color-mix(in srgb, ${section.color} 12%, transparent)`,
+                        color: section.color,
+                      }
+                    : {
+                        padding: '5px 12px', borderRadius: 999, cursor: 'pointer', fontFamily: 'inherit',
+                        fontSize: 14, outline: 'none',
+                        border: '1px solid transparent', borderColor: 'transparent', background: 'transparent',
+                        color: 'var(--dsw-alias-text-secondary, #9ca3af)',
+                      },
                 }, section.title)),
               ),
-              // 内容区：左边一条主题色，输入框和保存按钮也用主题色，别太单调。
-              h('div', { style: { borderLeft: `3px solid ${active.color}`, paddingLeft: 12, paddingTop: 2, paddingBottom: 2 } },
+              // 内容区：顶部一条当前分类的色带（和 QQ 桥一致）。
+              h('div', { style: { paddingTop: 2, paddingBottom: 2 } },
+                h('div', { style: { height: 3, borderRadius: 2, background: active.color, margin: '2px 0 10px' } }),
                 h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 } },
-                  h('span', { style: { fontSize: 12, fontWeight: 600, color: active.color } }, active.title),
+                  h('span', { style: { fontSize: 14, fontWeight: 600, color: active.color } }, active.title),
                   view === 'config' && config.editable === false
                     ? h('span', { style: { color: '#fbbf24', fontSize: 11 } }, '这个 profile 只能看不能改')
                     : null,
