@@ -1,7 +1,7 @@
-# dsh-mood 0.2.22 已知问题与优化清单
+# dsh-mood 0.2.23 已知问题与优化清单
 
-> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜 · E6 回滚撞车：2026-11-24 凌晨 · E7 批量回滚+标记：2026-11-24 凌晨 · E8 无聊互斥补漏：2026-11-24 上午 · E9 面板变化列显示：2026-11-24 上午 · E10 注入消息缺 id 卡死归档：2026-11-24 下午 · E11 /tick 调试核算接口：2026-11-24 下午 · E12 主动核算工具：2026-11-24 下午 · E13 注入只发她的会话：2026-11-24 下午 · E14 按工作目录自动认家：2026-11-24 下午 · E15 shy 标签改「害羞」：2026-11-24 下午 · E16 shy 亲近权重 乐 0.6/惧 0.4：2026-11-24 下午 · E17 面板日志按时间降序：2026-11-24 下午 · E18 面板显示上次掷骰：2026-11-24 晚 · E19 设置页（插件配置/运行参数/情绪基线）：2026-11-24 晚
-> 对应版本：0.2.22（0.2.2 + E1–E19）
+> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜 · E6 回滚撞车：2026-11-24 凌晨 · E7 批量回滚+标记：2026-11-24 凌晨 · E8 无聊互斥补漏：2026-11-24 上午 · E9 面板变化列显示：2026-11-24 上午 · E10 注入消息缺 id 卡死归档：2026-11-24 下午 · E11 /tick 调试核算接口：2026-11-24 下午 · E12 主动核算工具：2026-11-24 下午 · E13 注入只发她的会话：2026-11-24 下午 · E14 按工作目录自动认家：2026-11-24 下午 · E15 shy 标签改「害羞」：2026-11-24 下午 · E16 shy 亲近权重 乐 0.6/惧 0.4：2026-11-24 下午 · E17 面板日志按时间降序：2026-11-24 下午 · E18 面板显示上次掷骰：2026-11-24 晚 · E19 设置页（插件配置/运行参数/情绪基线）：2026-11-24 晚 · E20 设置页兜底注册独立 section：2026-11-24 晚
+> 对应版本：0.2.23（0.2.2 + E1–E20）
 > 行号以审计时文件为准，后续编辑会漂移，以问题描述定位为准。
 
 ---
@@ -46,6 +46,7 @@
 | E17 | 胶囊日志按块反转文件顺序，最新的一笔不一定在最上面，读着得来回找时间 | ✅ 已实现（0.2.20：`/log` 响应按「记录时间」降序、跨块合并；同一分钟保持文件先后；日志 .md 排序不动） |
 | E18 | 胶囊面板看不到思念/无聊的掷骰状态：不知道上次掷没掷、中没中、多久前 | ✅ 已实现（0.2.21：面板加「上次掷骰」一行——思念/无聊各显示「掷中/未掷中 · N分钟前」，从没掷过写「未掷过」，夜间写「夜晚停掷」；`shouldKnock` 记 `lastRollHit`，`/state` 透出 `lastRoll`/`lastRollHit`/`rollNightPaused`） |
 | E19 | 设置界面看不到插件配置（客户端不再自动生成插件配置页），思念/无聊的增速、衰减 CD、情绪基线也没有可改的入口 | ✅ 已实现（0.2.22：插件自己注册 `settings.plugins.tab` 的「情绪插件」页——① 插件配置（profile，`configEditor` 写）② 运行参数（`mood/tuning.json`，**即时生效**：增速/衰减系数/冷却/夜间窗口）③ 情绪基线（`mood/baseline.json`）；三条本机接口 `/config` `/tuning` `/baseline`） |
+| E20 | 只注册 `settings.plugins.tab` 时，如果「插件」section 不显示，整页就看不见（用户给《DSH插件设置页改造配方》：要再注册独立 `settings.section`） | ✅ 已修复（0.2.23：同时注册独立 `settings.section`（id `dsh-mood-changes`、order 29，左侧「情绪插件」一整页）与 `settings.plugins.tab`（order 90）；注册包在 `ctx.inject(['slots'])` + `setTimeout(0)` 里，slot 不存在时兜住异常） |
 
 修复验证：run.mjs 9 项 + rollback 7 项 + rollback-collision 8 项（E6 端到端，含传播行场景）+ features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 18 项（E4/E8 端到端）+ batch-rollback 20 项（E7 端到端）+ mark-rollback 25 项（E7b 端到端）+ change-text 28 项（E9 端到端，含路由响应）+ statusbar-id 13 项（E10：id/UUID/唯一性/source/容错）+ tick-route 13 项（E11：注册/成功/错误/不传 onTick 兼容/state 回归）+ settle 30 项（E12：入队→主动核算→落盘→空队列→核算后回滚→无冷却→兼容）+ inject-scope 9 项（E13：状态条/敲门只发她、未配时全量、id/source 不回退）+ workspace-home 12 项（E14：选对家/排除归档与工作目录/subagent/fork/换会话跟上/没有家不投）+ log-order 13 项（E17：/log 按记录时间降序、同分钟保持文件序、块筛选仍降序、日志 .md 排序不动、无记录日期空数组）+ roll-status 37 项（E18：掷骰记 lastRollHit、/state 透出、旧 state 兜底、夜晚停掷边界）+ tuning 50 项（E19：运行参数归一化/单位换算/夜间窗口/参数化行为/落盘；/tuning 与 /baseline 的 GET/POST、白名单、400、403）+ 判官真机（judge-test.mjs）；16 个 JS 文件 `node --check` 通过（合计 368 项断言）。
 
@@ -54,6 +55,7 @@ E16 是权重表改动（数据），判句/传播/衰减逻辑未动；`feature
 E17 只改显示顺序（`/log` 响应排序 + client 去掉旧反转），日志 .md 的排序与内容都没动；全量 18 个脚本 281 项断言全绿。
 E18 只加记录字段和显示，不改掷骰概率/阈值/夜间窗口：`lastRollHit` 在 `shouldKnock` 里顺手记，`/state` 多三个字段，面板多一行小字；全量 19 个脚本 318 项断言全绿。
 E19 把原来写死的运行参数抽成 `lib/tuning.js`（默认值 = 旧常量，不配文件行为不变），Missing/Boredom 的 tick/drop/onToolCall/shouldKnock 加可选 `opts`；设置页分「插件配置 / 运行参数（增速·衰减·冷却·夜间）/ 情绪基线」；全量 20 个脚本 368 项断言全绿。
+E20 只改客户端注册方式（同时注册 `settings.section` + `settings.plugins.tab`，包 `ctx.inject(['slots'])`），未新增断言；重启后查 `settings.section` 的 occupants 应出现 `dsh-mood-changes`。
 
 ---
 
@@ -309,6 +311,23 @@ GET /dsh-mood-changes/tick
 - `client.js`：注册 `settings.plugins.tab`（id `dsh-mood-changes`、order 90、label「情绪插件」），设置页三块——**插件配置**（11 项，保存后重载）、**运行参数**（按 增速 / 衰减 / 冷却 / 夜间 分块，共 13 项，保存即生效）、**情绪基线**（六情 6 个数字）。
 
 **回归**：新增 `_tmp/mood-smoke/tuning-test.mjs` 50 项——默认值/脏值丢弃/范围校验、毫秒↔分钟往返、夜间窗口（默认与自定义跨零点）、参数化后的增速/系数/冷却/工具窗口/追加次数、`loadTuning`/`saveTuning` 落盘、`/tuning` 与 `/baseline` 的 GET/POST 与 400/403；全量 20 个脚本 368 项断言全绿。
+
+---
+
+## 2026-11-24 晚：E20 设置页兜底注册独立 section（用户给配方后）
+
+**背景**：用户递来《DSH插件设置页改造配方》（`C:\Users\fan\Desktop\DSH插件设置页改造配方.md`）。配方实测：DSH 44.7.0 里 `settings.plugins.tab` 只是「插件」section 里的页签，**「插件」这一项是否显示由 DSH 决定**；只注册 tab 的话，section 不显示就等于整页看不见。QQ 桥的做法是**再注册一个独立 `settings.section`**（左侧一整页），跟「世界控制台」「皮肤」一样。
+
+**核对**：查了当前 slot 树——`settings.section` 的 occupants 有 account / general / models / plugins / agent-presets / world-console / qq-bridge / skin-center，`plugins` 在（order 15），qq-bridge 已单独注册（order 30）。
+
+**改法**（`client.js`）：
+
+- 同时注册两处，同一组件 `MoodSettingsTab`：
+  - `settings.section`：id `dsh-mood-changes`、order 29（世界控制台 28 之后、QQ 桥 30 之前，左侧显示「情绪插件」）。
+  - `settings.plugins.tab`：id `dsh-mood-changes`、order 90（原样保留）。
+- 注册包在 `ctx.inject(['slots'])` + `setTimeout(0)` 里（配方要求：等 slots 就绪再注册，旧版让原生服务先注册），单个 slot 不存在时 `try/catch` 兜住，不影响 apply。
+
+**验证**：重启后查 `settings.section` 的 occupants 应出现 `{ registrant: 'dsh-mood-changes', id: 'dsh-mood-changes', order: 29, active: true }`；左侧导航应出现「情绪插件」。未新增断言（客户端 slot 注册无法在 host 测试里跑；全量 20 脚本 368 项仍绿）。
 
 ---
 

@@ -566,11 +566,29 @@ window.__ModuleLoader__.load({
           name: 'shell.overlay', id: 'dsh-mood-changes-card', order: 100,
         }, MoodOverlay));
 
-        // 设置页的「情绪插件」tab（E19，2026-11-24）：插件配置页不再自动生成，
-        // 由插件自己往 settings.plugins.tab 注册一个 tab。
-        ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
-          name: 'settings.plugins.tab', id: 'dsh-mood-changes', order: 90, label: () => '情绪插件',
-        }, MoodSettingsTab));
+        // 设置界面（E19/E20，2026-11-24）：插件配置页不再自动生成，要插件自己注册。
+        // 两处都注册，原因见《DSH插件设置页改造配方》：
+        //   - settings.plugins.tab：只是「插件」页里的一个 tab；这一版的「插件」
+        //     section 是否显示由 DSH 自己决定，不显示就等于没注册。
+        //   - settings.section：左侧导航的独立一整页，跟「世界控制台」「皮肤」一样，
+        //     不依赖「插件」section 是否可见。
+        // 包在 ctx.inject(['slots']) + setTimeout(0) 里：等 slots 服务就绪再注册，
+        // 旧版 DSH 上让原生服务先注册；slot 不存在时兜住异常，别拖垮整个 apply。
+        ctx.inject(['slots'], (scoped) => {
+          setTimeout(() => {
+            const register = (slot, id, order) => {
+              try {
+                scoped.slots.inject(slot, () => scoped.slots.register({
+                  name: slot, id, order, label: () => '情绪插件',
+                }, MoodSettingsTab));
+              } catch (error) {
+                console?.debug?.(`dsh-mood-changes: ${slot} unavailable (${error?.message ?? error})`);
+              }
+            };
+            register('settings.section', 'dsh-mood-changes', 29);
+            register('settings.plugins.tab', 'dsh-mood-changes', 90);
+          }, 0);
+        });
       },
     };
   },
