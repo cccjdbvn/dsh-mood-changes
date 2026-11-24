@@ -40,6 +40,30 @@ function textOf(message) {
 /** Timer APIs (ctx.interval) require the timer service as a declared dependency. */
 export const inject = ['timer', 'webServer'];
 
+/**
+ * 谁是主人（E24，2026-11-24 用户明确）：
+ *  - **桌面端输入框来的消息默认就是主人**——不管 source.kind 是 'user'、空、
+ *    还是客户端自己别的标记，只要不是插件注入，一律当主人（思念降值）。
+ *  - **QQ 端认主人**：只有 QQ 桥注入的私聊消息、且昵称在 ownerNames 里才算；
+ *    群聊、别人、解析不出昵称的都不算（思念不降）。
+ * 导出成模块顶层函数，方便测试直接跑。
+ * @param {string} kind - message.source.kind
+ * @param {string} text - 消息正文
+ * @param {string[]} names - 主人昵称表（config.ownerNames）
+ * @returns {boolean}
+ */
+export function ownerFromSource(kind, text, names = []) {
+  const k = typeof kind === 'string' ? kind : '';
+  // 0.2.0 的插件 source 是 `plugin:<包名>`；老格式是 `plugin`。
+  const isPluginSource = k === 'plugin' || k.startsWith('plugin:');
+  if (!isPluginSource) return true; // 桌面端输入 / 系统 / 客户端 → 主人
+  const m = String(text ?? '').match(/^\[QQ[^\]]*\]\s*([^：:]{1,40})[：:]/);
+  if (!m) return false; // 插件注入但不是 QQ 消息 → 不算主人
+  const who = m[1].trim();
+  const isPrivate = String(text).startsWith('[QQ · 私聊]');
+  return isPrivate && names.includes(who);
+}
+
 export function apply(ctx, config) {
   const worldDir = config.worldDir;
   if (!worldDir) {
@@ -486,25 +510,7 @@ export function apply(ctx, config) {
   }
 
   // --- Message flow (session/event): user side ---
-
-  /**
-   * B1: who counts as the owner?
-   *  - DSH composer (no plugin kind) → owner
-   *  - QQ bridge private chat + name in ownerNames → owner
-   *  - group chat or anyone else → not the owner (missing never drops)
-   */
-  function ownerFromSource(kind, text) {
-    if (!kind || kind === 'user') return true;
-    if (kind.startsWith('plugin:')) {
-      const m = text.match(/^\[QQ[^\]]*\]\s*([^：:]{1,40})[：:]/);
-      if (m) {
-        const who = m[1].trim();
-        const isPrivate = text.startsWith('[QQ · 私聊]');
-        return isPrivate && ownerNames.includes(who);
-      }
-    }
-    return false;
-  }
+  // 主人判定见模块顶层的 ownerFromSource（导出给测试用）。
 
   function onUserMessage(sessionId, msg, now) {
     if (!state) return;
@@ -520,7 +526,7 @@ export function apply(ctx, config) {
 
     lastActivityAt = now; // any message refreshes the judge-context CD
 
-    const isOwner = ownerFromSource(kind, text);
+    const isOwner = ownerFromSource(kind, text, ownerNames);
 
     // Collect for the open turn (fed to the judge at turn/end).
     let users = turnUserTexts.get(sessionId);
