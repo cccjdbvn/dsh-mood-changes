@@ -138,8 +138,9 @@ window.__ModuleLoader__.load({
           if (block) params.set('block', block);
           const resp = await fetch('/dsh-mood-changes/log?' + params.toString());
           const data = await resp.json();
-          // Newest first in the card's log view.
-          setLogEntries((data.entries || []).slice().reverse());
+          // 顺序由服务端给（E17：/log 按记录时间降序，最新在最上面）；
+          // 这里不再反转，免得把时间序又倒回去。
+          setLogEntries(data.entries || []);
         } catch (e) {
           setLogEntries([]);
         }
