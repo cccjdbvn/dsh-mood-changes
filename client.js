@@ -241,7 +241,11 @@ window.__ModuleLoader__.load({
                         h('tr', { key: i },
                           h('td', { style: cellStyle }, e.time),
                           h('td', { style: cellStyle }, e.emotion),
-                          h('td', { style: { ...cellStyle, fontVariantNumeric: 'tabular-nums' } }, e.delta),
+                          // 变化列（2026-11-24）：服务端给 change = 块名+带符号数值
+                          // （怒+5 / 悲-3 / 思念+3 / 无聊-12 / 回滚+0 / 状态行 —）。
+                          // 日志 .md 仍是纯数值；老响应没有 change 时退回旧数值显示。
+                          h('td', { style: { ...cellStyle, fontVariantNumeric: 'tabular-nums' } },
+                            e.change != null ? e.change : e.delta),
                           h('td', { style: { ...cellStyle, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, e.reason),
                         )
                       )
