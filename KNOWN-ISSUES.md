@@ -1,7 +1,7 @@
-# dsh-mood 0.2.16 已知问题与优化清单
+# dsh-mood 0.2.17 已知问题与优化清单
 
-> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜 · E6 回滚撞车：2026-11-24 凌晨 · E7 批量回滚+标记：2026-11-24 凌晨 · E8 无聊互斥补漏：2026-11-24 上午 · E9 面板变化列显示：2026-11-24 上午 · E10 注入消息缺 id 卡死归档：2026-11-24 下午 · E11 /tick 调试核算接口：2026-11-24 下午 · E12 主动核算工具：2026-11-24 下午 · E13 注入只发她的会话：2026-11-24 下午
-> 对应版本：0.2.16（0.2.2 + E1–E13）
+> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜 · E6 回滚撞车：2026-11-24 凌晨 · E7 批量回滚+标记：2026-11-24 凌晨 · E8 无聊互斥补漏：2026-11-24 上午 · E9 面板变化列显示：2026-11-24 上午 · E10 注入消息缺 id 卡死归档：2026-11-24 下午 · E11 /tick 调试核算接口：2026-11-24 下午 · E12 主动核算工具：2026-11-24 下午 · E13 注入只发她的会话：2026-11-24 下午 · E14 按工作目录自动认家：2026-11-24 下午
+> 对应版本：0.2.17（0.2.2 + E1–E14）
 > 行号以审计时文件为准，后续编辑会漂移，以问题描述定位为准。
 
 ---
@@ -40,8 +40,9 @@
 | E11 | 核算 15 分钟一次，调试时干等、不知道 tick 有没有抛错 | ✅ 已实现（0.2.14：`GET /dsh-mood-changes/tick` 立刻核算一次，返回 `{ok, lastTickAt, values, queue}`；出错回 `{ok:false, error}`） |
 | E12 | 判句入账要等 tick（或强触发），模型没法主动结算；想撤一笔未结算的判句也找不到日志行 | ✅ 已实现（0.2.15：`mood_settle` 工具，模型主动启动、无冷却，只结算队列不衰减；空队列 `settled:0`） |
 | E13 | 状态条/敲门注入给所有 live agent，工作会话也收到她的情绪 | ✅ 已修复（0.2.16：只发给 `targetSessionId` 对应的 agent（`agent.id` 即 SessionId）；未配时保持全量旧行为） |
+| E14 | 换会话后 `targetSessionId` 就过时，得手动改配置 | ✅ 已实现（0.2.17：`targetWorkspaceDir`——按目录找最新创建、未归档、活着的根会话，投送/判句/降值都认它；换会话自动跟上） |
 
-修复验证：run.mjs 9 项 + rollback 7 项 + rollback-collision 8 项（E6 端到端，含传播行场景）+ features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 18 项（E4/E8 端到端）+ batch-rollback 20 项（E7 端到端）+ mark-rollback 25 项（E7b 端到端）+ change-text 28 项（E9 端到端，含路由响应）+ statusbar-id 13 项（E10：id/UUID/唯一性/source/容错）+ tick-route 13 项（E11：注册/成功/错误/不传 onTick 兼容/state 回归）+ settle 30 项（E12：入队→主动核算→落盘→空队列→核算后回滚→无冷却→兼容）+ inject-scope 9 项（E13：状态条/敲门只发她、未配时全量、id/source 不回退）+ 判官真机（judge-test.mjs）；14 个 JS 文件 `node --check` 通过（合计 256 项断言）。
+修复验证：run.mjs 9 项 + rollback 7 项 + rollback-collision 8 项（E6 端到端，含传播行场景）+ features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 18 项（E4/E8 端到端）+ batch-rollback 20 项（E7 端到端）+ mark-rollback 25 项（E7b 端到端）+ change-text 28 项（E9 端到端，含路由响应）+ statusbar-id 13 项（E10：id/UUID/唯一性/source/容错）+ tick-route 13 项（E11：注册/成功/错误/不传 onTick 兼容/state 回归）+ settle 30 项（E12：入队→主动核算→落盘→空队列→核算后回滚→无冷却→兼容）+ inject-scope 9 项（E13：状态条/敲门只发她、未配时全量、id/source 不回退）+ workspace-home 12 项（E14：选对家/排除归档与工作目录/subagent/fork/换会话跟上/没有家不投）+ 判官真机（judge-test.mjs）；14 个 JS 文件 `node --check` 通过（合计 268 项断言）。
 
 ---
 
@@ -230,6 +231,34 @@ GET /dsh-mood-changes/tick
 
 ---
 
+## 2026-11-24 下午：E14 按工作目录自动认家（用户需求）
+
+**需求**：换会话后 `targetSessionId` 就过时了，每次都得等 set-home 改配置。改成「按特定工作目录找未归档会话」：**投送、判句来源、降值都认同一个会话**，换会话自动跟上。
+
+**DSH 侧的事实**（读代码确认，不是猜的）：
+
+- `Agent.id` 就是 `SessionId`（`@deepseek-ai/dsh-agent` 的 Agent 接口）。
+- 活的会话从 `ctx.sessions.list()` 拿，`session.header` 有 `cwd`（创建时的工作目录，canonical）和 `createdAt`。
+- DSH 工作区的归档集合在 `ctx.workspaceRegistry.archivedSessionIds`（getter，`dsh-workspace`），用来精确排除「已归档」。
+
+**语义**（用户拍板）：
+
+- 新配置 **`targetWorkspaceDir`**（如 `F:\DSH\.dsh\worlds\lian\room`）优先级高于 `targetSessionId`；没配目录时才退回按会话 id；两个都没配 = 所有会话（旧行为）。
+- 目标 = 该目录下**最新创建、未归档、活着的根会话**：
+  - 排除其它目录（工作会话）；
+  - 排除 `workspaceRegistry.archivedSessionIds` 里的（即使它还活着）；
+  - 排除 `origin: 'subagent'` 和带 `parentSession` 的（家是根会话，不投给 subagent/fork）；
+  - 多个候选取 `createdAt` 最大的一个。
+- **每次需要时重新解析**，不缓存：换会话后下一条消息/下一跳 tick 自动跟上；目录下没有活着的家 → 谁也不投，**不回退成全量**。
+- `session/event` 过滤、状态条注入、`knock()`、`tools/result` 的会话归属都用同一个解析结果。
+- 顺带修正：状态条/敲门**实际投出去至少一条**才更新 `lastInjectAt` / 重置摘要段；没有接收者时不吞掉节奏。
+
+**配置**：profile `cordis.patch.yml` 的 mood 段加了 `targetWorkspaceDir: 'F:\DSH\.dsh\worlds\lian\room'`（备份 `cordis.patch.yml.bak-20261124-workspacehome`；文件原来带 UTF-8 BOM，这次按 node 脚本写回时剥掉，YAML 解析已验证）。`targetSessionId` 留着当兜底。
+
+**回归**：新增 `_tmp/mood-smoke/workspace-home-test.mjs` 12 项——多候选里选中最新未归档根会话、已归档（即使活着）/工作目录/subagent/fork 都不投、状态条与敲门只发它、工作会话消息不入账、换会话后自动跟上（新会话被认、旧会话不再入账）、目录下没有家时谁也不投。
+
+---
+
 ## 已修复明细（供 review）
 
 - **A1** `log.js dateFor()`：改用本地 `getFullYear/getMonth/getDate`，禁用 `toISOString`。
@@ -258,6 +287,7 @@ GET /dsh-mood-changes/tick
 - **E11** `lib/routes.js` 新增 `GET /dsh-mood-changes/tick`（可选 `onTick`，不传不注册）+ `index.js` 传入 `tick`：调试时立刻核算一次；返回 `{ok, lastTickAt, values, queue}`，出错回 `{ok:false, error}`。
 - **E12** `index.js settleQueueNow()` + `lib/tools.js mood_settle`：模型主动核算——只结算队列（delta + 传播 + 写日志 + 落盘），不衰减/不推进 tick/不跑思念无聊/不掷骰/不注入；无冷却，空队列 `settled:0`。`settleEntries()` 返回 logBatch 供工具回显。
 - **E13** `index.js isHerAgent()` + knock/状态条两个注入循环：状态条与敲门只发给 `targetSessionId` 对应的 agent（`Agent.id` 即 SessionId）；未配时全量旧行为。工作会话不再收到她的情绪。
+- **E14** `index.js` 目标会话解析：`targetWorkspaceDir` 优先——`resolveWorkspaceHome()` 在 `ctx.sessions.list()` 里选该目录下最新创建、不在 `workspaceRegistry.archivedSessionIds`、非 subagent/fork 的根会话；`session/event`、状态条注入、`knock()`、`tools/result` 共用 `targetSessionId()` 解析（每次重新算，不缓存）；没配目录时退回 `targetSessionId`。投送成功才推进 `lastInjectAt`/摘要。
 
 ## 功能缺口收账
 

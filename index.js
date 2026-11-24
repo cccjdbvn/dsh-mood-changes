@@ -1,6 +1,6 @@
 import Schema from '@deepseek-ai/schemastery';
 import { appendFileSync, watch } from 'node:fs';
-import { join } from 'node:path';
+import { join, normalize } from 'node:path';
 import { MoodStore } from './lib/store.js';
 import { MoodPool } from './lib/pool.js';
 import { Judge } from './lib/judge.js';
@@ -24,7 +24,8 @@ export const Config = Schema.object({
   judgeTemperature: Schema.number().default(0.3).description('判官采样温度'),
   tickIntervalMs: Schema.number().default(900000).description('tick 间隔（毫秒，默认 15 分钟）'),
   ownerNames: Schema.array(Schema.string()).default([]).description('主人在 QQ 消息里的显示名；群聊一律不降思念，私聊且名字在列表里才降'),
-  targetSessionId: Schema.string().default('').description('只认这个会话的消息流（她的会话 id）；留空 = 所有会话都算她的（工作会话会被误入账）'),
+  targetSessionId: Schema.string().default('').description('只认这个会话的消息流（她的会话 id）；留空 = 所有会话都算她的（工作会话会被误入账）。配了 targetWorkspaceDir 时以目录为准'),
+  targetWorkspaceDir: Schema.string().default('').description('按工作目录自动认家：找该目录下最新创建、未归档、活着的根会话；投送状态条/敲门、判句来源、思念/无聊降值都用它。配了它就不用 targetSessionId；留空 = 退回按会话 id'),
 });
 
 /** Extract plain text from a message whose content may be a string or blocks. */
@@ -262,29 +263,23 @@ export function apply(ctx, config) {
 
   // --- Knock (掷骰敲门): missing / boredom ask to interact ---
 
-  /**
-   * 只认她的会话（2026-11-24 用户需求）：状态条/敲门只发给她。
-   * `Agent.id` 就是 SessionId（@deepseek-ai/dsh-agent 的 Agent 接口），
-   * 所以和 targetSessionId 直接比即可；未配 targetSessionId 时保持旧行为
-   * （所有 live agent 都发）。
-   */
-  function isHerAgent(agent) {
-    return !config.targetSessionId || agent?.id === config.targetSessionId;
-  }
-
   /** Inject a knock message (with the riding summary) into her agent only. */
   function knock(text, now) {
     const full = text + buildSummary(now);
     const agents = ctx.get('agents');
+    const target = targetSessionId();
+    let delivered = 0;
     if (agents) {
       for (const agent of agents.list()) {
-        if (!isHerAgent(agent)) continue;
+        if (!isHerAgent(agent, target)) continue;
         const sb = statusBars.get(agent.id);
-        if (sb) sb.knock(full);
+        if (sb) { sb.knock(full); delivered++; }
       }
     }
-    resetSummary(now);
-    state.lastInjectAt = now; // a knock also opens a new summary segment
+    if (delivered > 0) {
+      resetSummary(now);
+      state.lastInjectAt = now; // a knock also opens a new summary segment
+    }
   }
 
   function tryKnock(now) {
@@ -364,18 +359,22 @@ export function apply(ctx, config) {
 
     // 9. Maybe inject status bar
     if (StatusBar.shouldInject(state, now)) {
-      state.lastInjectAt = now;
       const agents = ctx.get('agents');
+      const target = targetSessionId();
+      let delivered = 0;
       if (agents) {
         for (const agent of agents.list()) {
-          if (!isHerAgent(agent)) continue;
+          if (!isHerAgent(agent, target)) continue;
           try {
             const sb = statusBars.get(agent.id);
-            if (sb) sb.inject(state);
+            if (sb) { sb.inject(state); delivered++; }
           } catch (e) { /* agent may not be ready */ }
         }
       }
-      resetSummary(now); // a status-bar injection opens a new summary segment
+      if (delivered > 0) {
+        state.lastInjectAt = now;
+        resetSummary(now); // a status-bar injection opens a new summary segment
+      }
     }
   }
 
@@ -415,6 +414,68 @@ export function apply(ctx, config) {
       scheduleBaselineSync();
     });
   } catch (e) { /* mood dir may not exist yet; the tool path still works */ }
+
+  // --- Target session resolution：targetWorkspaceDir 优先，其次 targetSessionId ---
+  //
+  // 2026-11-24 用户需求：按工作目录自动认家——该目录下「最新创建、未归档、
+  // 活着的根会话」就是她。投送（状态条/敲门）、判句来源、思念/无聊降值
+  // 全部用同一个解析结果；换会话后自动跟上，不用再改 session id。
+  // 归档判断直接读 workspaceRegistry.archivedSessionIds（DSH 工作区的归档集合）。
+
+  const CASE_INSENSITIVE_FS = process.platform === 'win32';
+
+  /** 目录比较口径：Windows 大小写不敏感，其余原样。 */
+  function normDir(p) {
+    if (!p) return '';
+    const n = normalize(String(p));
+    return CASE_INSENSITIVE_FS ? n.toLowerCase() : n;
+  }
+
+  function hasSessionRestriction() {
+    return Boolean(config.targetWorkspaceDir || config.targetSessionId);
+  }
+
+  /** 目录下最新创建、未归档、活着的根会话 id；没有则 null。 */
+  function resolveWorkspaceHome() {
+    const want = normDir(config.targetWorkspaceDir);
+    if (!want) return null;
+    const sessions = ctx.get('sessions');
+    if (!sessions?.list) return null;
+    let archived = [];
+    try {
+      archived = ctx.get('workspaceRegistry')?.archivedSessionIds || [];
+    } catch { /* registry not started yet */ }
+    const archivedSet = new Set(archived.map(String));
+    let best = null;
+    for (const session of sessions.list()) {
+      const header = session?.header;
+      if (!header) continue;
+      if (normDir(header.cwd) !== want) continue;
+      if (header.origin === 'subagent' || header.parentSession) continue; // 家是根会话
+      if (archivedSet.has(String(session.id))) continue;
+      if (!best || (header.createdAt ?? 0) > (best.header.createdAt ?? 0)) best = session;
+    }
+    return best ? String(best.id) : null;
+  }
+
+  /** 当前认的目标会话 id；null = 没配限制，或目录下暂无家。 */
+  function targetSessionId() {
+    if (config.targetWorkspaceDir) return resolveWorkspaceHome();
+    return config.targetSessionId || null;
+  }
+
+  /** 这个会话是不是她。没配任何限制 = 所有会话都算。 */
+  function isTargetSession(sessionId) {
+    if (!hasSessionRestriction()) return true;
+    const target = targetSessionId();
+    return target !== null && String(sessionId) === target;
+  }
+
+  /** 注入目标：只发给她的 agent；没配限制 = 所有 live agent。 */
+  function isHerAgent(agent, target = targetSessionId()) {
+    if (!hasSessionRestriction()) return true;
+    return target !== null && String(agent?.id) === target;
+  }
 
   // --- Message flow (session/event): user side ---
 
@@ -669,9 +730,9 @@ export function apply(ctx, config) {
     try {
       const sessionId = session?.id;
       if (!sessionId || !event || typeof event.type !== 'string') return;
-      // Only ONE session is "her": with targetSessionId set, everything else
-      // (work sessions, tooling sessions) stays out of her mood ledger.
-      if (config.targetSessionId && sessionId !== config.targetSessionId) return;
+      // 只认她的会话（targetWorkspaceDir 按目录自动认家，其次 targetSessionId）：
+      // 其他的（工作会话、工具会话）不进她的情绪账。
+      if (!isTargetSession(sessionId)) return;
       const now = Date.now();
 
       if (event.type === 'user/message') {
@@ -765,7 +826,10 @@ export function apply(ctx, config) {
       appendFileSync('F:/DSH/work/_tmp/tools-result-shape.log',
         `${new Date().toISOString()} source=${source} sessionId=${sessionId} execKeys=${Object.keys(exec || {}).slice(0, 20).join('|')}\n`);
     } catch {}
-    if (config.targetSessionId && sessionId && sessionId !== config.targetSessionId) return;
+    if (hasSessionRestriction() && sessionId) {
+      const target = targetSessionId();
+      if (!target || String(sessionId) !== target) return;
+    }
     const now = Date.now();
     // 2026-11-23 工具侧窗口衰减（用户拍板）：窗口内第 1 次 ×0.6（照旧冷却），
     // 第 5 次追加一次 ×0.6（跳过冷却）；每窗口最多两次。
