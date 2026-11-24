@@ -49,7 +49,7 @@
                                    "cap":  25
                                },
                      "shy":  {
-                                 "label":  "害臊",
+                                 "label":  "害羞",
                                  "weights":  {
                                                  "fear":  0.8,
                                                  "happy":  0.2
