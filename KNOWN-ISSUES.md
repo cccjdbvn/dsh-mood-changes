@@ -1,7 +1,7 @@
-# dsh-mood 0.2.13 已知问题与优化清单
+# dsh-mood 0.2.14 已知问题与优化清单
 
-> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜 · E6 回滚撞车：2026-11-24 凌晨 · E7 批量回滚+标记：2026-11-24 凌晨 · E8 无聊互斥补漏：2026-11-24 上午 · E9 面板变化列显示：2026-11-24 上午
-> 对应版本：0.2.13（0.2.2 + E1–E9）
+> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜 · E6 回滚撞车：2026-11-24 凌晨 · E7 批量回滚+标记：2026-11-24 凌晨 · E8 无聊互斥补漏：2026-11-24 上午 · E9 面板变化列显示：2026-11-24 上午 · E10 注入消息缺 id 卡死归档：2026-11-24 下午 · E11 /tick 调试核算接口：2026-11-24 下午
+> 对应版本：0.2.14（0.2.2 + E1–E11）
 > 行号以审计时文件为准，后续编辑会漂移，以问题描述定位为准。
 
 ---
@@ -36,8 +36,10 @@
 | E7 | 误判波要一笔一笔调回滚（今晚十连调） | ✅ 已实现（0.2.10/0.2.11：范围清扫 / 列表批量 / **标记机制 mark→executeMarked**） |
 | E8 | 无聊第二次衰减无视跨类型 30min 互斥 | ✅ 已修复（0.2.12：追加衰减只跳同类型 1h CD，被消息压住时排队、CD 过后补发） |
 | E9 | 面板日志「变化」列只有数值，看不出是哪一块 | ✅ 已实现（0.2.13：显示块名+带符号数值「怒+5」「无聊-12」；状态行「—」、回滚行「回滚+0」；日志文件仍写纯数值） |
+| E10 | 状态条/敲门注入的 `user/message` 缺 `id`，host 存储校验失败 → 世界归档整份卡死 | ✅ 已修复（0.2.14：`_post()` 补 `id: randomUUID()`；历史两条缺 id 的旧会话仍卡着，改 host 会话文件属数据手术，未做） |
+| E11 | 核算 15 分钟一次，调试时干等、不知道 tick 有没有抛错 | ✅ 已实现（0.2.14：`GET /dsh-mood-changes/tick` 立刻核算一次，返回 `{ok, lastTickAt, values, queue}`；出错回 `{ok:false, error}`） |
 
-修复验证：run.mjs 9 项 + rollback 7 项 + rollback-collision 8 项（E6 端到端，含传播行场景）+ features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 18 项（E4/E8 端到端）+ batch-rollback 20 项（E7 端到端）+ mark-rollback 25 项（E7b 端到端）+ change-text 28 项（E9 端到端，含路由响应）+ 判官真机（judge-test.mjs）；14 个 JS 文件 `node --check` 通过。
+修复验证：run.mjs 9 项 + rollback 7 项 + rollback-collision 8 项（E6 端到端，含传播行场景）+ features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 18 项（E4/E8 端到端）+ batch-rollback 20 项（E7 端到端）+ mark-rollback 25 项（E7b 端到端）+ change-text 28 项（E9 端到端，含路由响应）+ statusbar-id 13 项（E10：id/UUID/唯一性/source/容错）+ tick-route 13 项（E11：注册/成功/错误/不传 onTick 兼容/state 回归）+ 判官真机（judge-test.mjs）；14 个 JS 文件 `node --check` 通过（合计 217 项断言）。
 
 ---
 
@@ -153,6 +155,44 @@ disable→enable 后，`/dsh-mood-changes/state` 路由仍应答**旧 apply 闭�
 
 ---
 
+## 2026-11-24 下午：E10 注入消息缺 id，把世界归档卡死（现场查清）
+
+**症状**：世界控制台健康提示一直挂着——
+
+```
+会话 session-175c9f96-… 归档未完成：
+stored session "session-175c9f96-…" failed validation:
+Error: session event at seq 5048 lacks an identified message
+```
+
+**查法**：会话日志是 `sessions\<工作区>\<id>\session.v4.jsonl.zstd`，用 `zstd.exe -d` 解压逐行看。seq 5048 与 5135 两条都是 `user/message`，`data` 里**没有 `id`**，`source.kind` 都是 `plugin:dsh-mood-changes`——就是情绪插件敲门（「无聊 65.4，要不要自己做点什么？」）那两条。全份 5335 行里只有这两条缺 id。
+
+**根因**：`lib/statusbar.js` 的 `_post()` 调 `agent.inject({ role:'user', content, source })`，没给 `id`。host 的存储校验要求每条 surface 消息带 message id（`UserMessage extends MessageBase`，`id: MessageId` 必填），对不上就整份拒绝打开。世界的重放是整份重放，一拒绝就从头卡在那一行，**后面的对话既不进记忆索引，也不进 `conversations/`**（11-24 09:40 之后到收工那段因此没归档）。
+
+**修复**（0.2.14）：`_post()` 里补 `id: randomUUID()`（`node:crypto`），状态条和敲门两条注入路径共用。备份 `lib/statusbar.js.bak-20261124-id`。`source.kind`、正文格式、自注入跳过（B2）全部不变。
+
+**回归**：新增 `_tmp/mood-smoke/statusbar-id-test.mjs` 13 项（id 存在/UUID v4 形状/role/source/正文一致/敲门/53 次不重复/无 inject 容错）。
+
+**还欠一步**：历史那两条（5048、5135）仍缺 id，所以那份旧会话归档还卡着。补它要改 host 的会话文件（解压 → 补字段 → 压回），属于工作区外的核心数据；2026-11-24 用户决定**先不修**，等以后再说。
+
+---
+
+## 2026-11-24 下午：E11 GET /tick 调试核算接口
+
+**背景**：核算 15 分钟一次，调试时只能干等下一跳才知道 tick 有没有抛错（或者想立刻看到队列结算后的数）。0.2.14 加一条只读调试路由：
+
+```
+GET /dsh-mood-changes/tick
+→ { ok: true, lastTickAt, values, queue }        // 成功：立刻跑一次 tick
+→ { ok: false, error: "<stack>" }                // tick 抛错：把堆栈带回来
+```
+
+**实现**：`registerRoutes()` 多收一个可选 `onTick`；不传时**不注册**该路由（旧装配/测试照样能跑）。`index.js` 把 `tick(now)` 传进去。用 GET 是因为 resource 路由只接 GET/HEAD，本机只读调试够用；**它会真的改账**（结算队列、落盘），不是纯查询。
+
+**回归**：新增 `_tmp/mood-smoke/tick-route-test.mjs` 13 项（三条路由都注册/disposer、成功回显、onTick 恰好一次、错误回 ok:false+堆栈、不传 onTick 不注册且 state/log 照旧、/state 字段回归）。
+
+---
+
 ## 已修复明细（供 review）
 
 - **A1** `log.js dateFor()`：改用本地 `getFullYear/getMonth/getDate`，禁用 `toISOString`。
@@ -177,6 +217,8 @@ disable→enable 后，`/dsh-mood-changes/state` 路由仍应答**旧 apply 闭�
 - **E7** `lib/tools.js mood_rollback` 三种直接模式：单笔（time+block，支持 newDelta）/ **范围清扫**（from+to，把范围内所有站着的六块判句主条全部纯删除，每笔带传播级联 + E3 状态级联；思念/无聊/状态行与范围外不动；每轮循环取最新快照的第一条站立马条，同分钟兄弟行下一轮再取，失败的目标记入 failed 集合保证终止）/ **列表批量**（items=[{time,block}…]）。**0.2.11 标记机制（用户拍板）**：`mark` 把误判条目标为待回滚（存 `state.pendingRollback`，持久化；只标记不动数值不动日志）；`executeMarked: true` 一键执行全部已标记（走 rollbackOne，纯删除；标记后已被单独回滚的视为完成并移出队列）；`unmark` 解除；**无参数调用返回当前标记清单**。核心逻辑抽成 `rollbackOne`（不落盘，由调用方统一存一次）；批量/标记共用 note、只做纯删除。
 - **E8** `lib/boredom.js onToolCall()`：第二次衰减（窗口第 5 次）改为**只跳同类型 1h CD、尊重跨类型 30min 互斥**——E4 实现时误把「跳过冷却」做成了跳过全部，现场（2026-11-24 08:12 消息 ×0.7 → 08:19 第 5 次追加 ×0.6 连打两窗口）实锤。被消息压住时计数保持 ≥5（不重置不丢），CD 过后的下一次工具调用补发该衰减；首笔衰减的互斥行为不变。
 - **E9** `lib/log.js changeText()` + `lib/routes.js /log` 响应 `change` 字段 + `client.js` 变化列：块名+带符号数值（`怒+5`/`无聊-12`），状态行 `—`，回滚行 `回滚+0`；日志文件与回滚解析仍用纯数值，`delta` 字段保留。
+- **E10** `lib/statusbar.js _post()`：补 `id: randomUUID()`——注入的 `user/message` 缺 id 会过不了 host 存储校验，让世界归档整份拒绝打开、卡在那一行（2026-11-24 现场：seq 5048/5135 两条敲门消息）。
+- **E11** `lib/routes.js` 新增 `GET /dsh-mood-changes/tick`（可选 `onTick`，不传不注册）+ `index.js` 传入 `tick`：调试时立刻核算一次；返回 `{ok, lastTickAt, values, queue}`，出错回 `{ok:false, error}`。
 
 ## 功能缺口收账
 
