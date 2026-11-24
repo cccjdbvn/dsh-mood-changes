@@ -176,7 +176,7 @@ export function apply(ctx, config) {
    * Does NOT decay and does NOT touch lastTickAt.
    */
   function settleEntries(entries, now) {
-    if (!entries || entries.length === 0) return;
+    if (!entries || entries.length === 0) return [];
     const mods = States.compositeMod(state.states);
     const logBatch = [];
 
@@ -237,6 +237,27 @@ export function apply(ctx, config) {
 
     MoodPool.clamp(state.values);
     if (logBatch.length) fireAndForget(log.appendBatch(logBatch));
+    return logBatch;
+  }
+
+  /**
+   * 主动核算（2026-11-24 用户需求）：只把队列里积的判句事件结算掉——
+   * 真正入账（delta + 耦合传播 + 写主条/传播行日志 + 由调用方落盘），
+   * 但**不做时间衰减**、不推进 lastTickAt、不跑思念/无聊、不掷骰、不注入。
+   * 无冷却，可连调。和 tick 的区别：tick 是「衰减 + 结算 + 时间线 + 敲门 + 注入」，
+   * 核算只做中间那一步。
+   * @returns {{queued:number, rows:object[], changes:Record<string,number>, values:Record<string,number>}}
+   */
+  function settleQueueNow(now) {
+    const before = { ...state.values };
+    const queued = (state.queue || []).length;
+    const rows = settleEntries(store.drainQueue(state), now) || [];
+    const changes = {};
+    for (const base of Object.keys(before)) {
+      const d = Math.round(((state.values[base] ?? 0) - (before[base] ?? 0)) * 10) / 10;
+      if (Math.abs(d) > 0.001) changes[base] = d;
+    }
+    return { queued, rows, changes, values: { ...state.values } };
   }
 
   // --- Knock (掷骰敲门): missing / boredom ask to interact ---
@@ -697,7 +718,7 @@ export function apply(ctx, config) {
       lastStateSaveAt = Date.now();
       await store.saveState(state);
     };
-    toolDisposers = registerTools(ctx, store, baselineRef, () => state, saveNow);
+    toolDisposers = registerTools(ctx, store, baselineRef, () => state, saveNow, settleQueueNow);
   } catch (e) {
     ctx.logger?.warn?.('[dsh-mood-changes] tool registration error:', e);
   }

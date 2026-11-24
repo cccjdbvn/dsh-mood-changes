@@ -1,7 +1,7 @@
-# dsh-mood 0.2.14 已知问题与优化清单
+# dsh-mood 0.2.15 已知问题与优化清单
 
-> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜 · E6 回滚撞车：2026-11-24 凌晨 · E7 批量回滚+标记：2026-11-24 凌晨 · E8 无聊互斥补漏：2026-11-24 上午 · E9 面板变化列显示：2026-11-24 上午 · E10 注入消息缺 id 卡死归档：2026-11-24 下午 · E11 /tick 调试核算接口：2026-11-24 下午
-> 对应版本：0.2.14（0.2.2 + E1–E11）
+> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜 · E6 回滚撞车：2026-11-24 凌晨 · E7 批量回滚+标记：2026-11-24 凌晨 · E8 无聊互斥补漏：2026-11-24 上午 · E9 面板变化列显示：2026-11-24 上午 · E10 注入消息缺 id 卡死归档：2026-11-24 下午 · E11 /tick 调试核算接口：2026-11-24 下午 · E12 主动核算工具：2026-11-24 下午
+> 对应版本：0.2.15（0.2.2 + E1–E12）
 > 行号以审计时文件为准，后续编辑会漂移，以问题描述定位为准。
 
 ---
@@ -38,8 +38,9 @@
 | E9 | 面板日志「变化」列只有数值，看不出是哪一块 | ✅ 已实现（0.2.13：显示块名+带符号数值「怒+5」「无聊-12」；状态行「—」、回滚行「回滚+0」；日志文件仍写纯数值） |
 | E10 | 状态条/敲门注入的 `user/message` 缺 `id`，host 存储校验失败 → 世界归档整份卡死 | ✅ 已修复（0.2.14：`_post()` 补 `id: randomUUID()`；历史两条缺 id 的旧会话仍卡着，改 host 会话文件属数据手术，未做） |
 | E11 | 核算 15 分钟一次，调试时干等、不知道 tick 有没有抛错 | ✅ 已实现（0.2.14：`GET /dsh-mood-changes/tick` 立刻核算一次，返回 `{ok, lastTickAt, values, queue}`；出错回 `{ok:false, error}`） |
+| E12 | 判句入账要等 tick（或强触发），模型没法主动结算；想撤一笔未结算的判句也找不到日志行 | ✅ 已实现（0.2.15：`mood_settle` 工具，模型主动启动、无冷却，只结算队列不衰减；空队列 `settled:0`） |
 
-修复验证：run.mjs 9 项 + rollback 7 项 + rollback-collision 8 项（E6 端到端，含传播行场景）+ features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 18 项（E4/E8 端到端）+ batch-rollback 20 项（E7 端到端）+ mark-rollback 25 项（E7b 端到端）+ change-text 28 项（E9 端到端，含路由响应）+ statusbar-id 13 项（E10：id/UUID/唯一性/source/容错）+ tick-route 13 项（E11：注册/成功/错误/不传 onTick 兼容/state 回归）+ 判官真机（judge-test.mjs）；14 个 JS 文件 `node --check` 通过（合计 217 项断言）。
+修复验证：run.mjs 9 项 + rollback 7 项 + rollback-collision 8 项（E6 端到端，含传播行场景）+ features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 18 项（E4/E8 端到端）+ batch-rollback 20 项（E7 端到端）+ mark-rollback 25 项（E7b 端到端）+ change-text 28 项（E9 端到端，含路由响应）+ statusbar-id 13 项（E10：id/UUID/唯一性/source/容错）+ tick-route 13 项（E11：注册/成功/错误/不传 onTick 兼容/state 回归）+ settle 30 项（E12：入队→主动核算→落盘→空队列→核算后回滚→无冷却→兼容）+ 判官真机（judge-test.mjs）；14 个 JS 文件 `node --check` 通过（合计 247 项断言）。
 
 ---
 
@@ -193,6 +194,27 @@ GET /dsh-mood-changes/tick
 
 ---
 
+## 2026-11-24 下午：E12 主动核算 mood_settle（用户需求）
+
+**需求**：判句入账平时要等 tick（15 分钟一跳，或强触发才立即结算）。模型想马上把「上次结算到现在」积的账算完、或者想撤一笔还没结算的判句，没有手段（未结算的条目没有日志行，`mood_rollback`/`mark` 都会报「找不到可回滚行」）。要一个**由模型主动启动、无冷却、只计算不衰减**的核算入口。
+
+**口径**（用户逐项确认）：
+
+- 结算范围 = **上次结算到现在**积在 `state.queue` 里的所有判句事件；**包括这段时间里被决定要回滚的条目**——先照常入账、写日志，想撤就核算完再用 `mood_rollback`（或先 mark、核算后 executeMarked）。核算不会跳过任何排队事件。
+- **真入账**：应用 delta + 耦合传播 + 写主条/传播行日志 + 立即落盘。
+- **只结算**：不做时间衰减、不推进 `lastTickAt`、不跑思念/无聊、不掷骰、不注入。和 tick 的区别是只做中间那一步。
+- **无冷却**，可连调；**队列为空** → `success:true, settled:0`，提示没有待结算事件，不报错。
+
+**实现**：
+
+- `index.js`：`settleEntries()` 改为返回本次写出的 `logBatch`（空队列返回 `[]`）；新增 `settleQueueNow(now)`——记录 before、drain 队列、结算、收集 changes/values，返回 `{queued, rows, changes, values}`。
+- `lib/tools.js`：`registerTools()` 多收可选 `settleNow`，注册 `mood_settle`（零参数；不传 `settleNow` 时不注册，向后兼容旧装配）。返回 `{success, settled, rows, changes, values}`；结算后 `saveNow()` 落盘。
+- 工具描述写明「先核算、再回滚」的正确顺序，以及不改 tick/不衰减的边界。
+
+**回归**：新增 `_tmp/mood-smoke/settle-test.mjs` 30 项——入队不结算（数值/日志不动）、调用后真入账（+15、传播行、日志）、**不衰减**（surprise 40 不动；sad 只被传播 -0.75）、lastTickAt/思念/无聊不动、队列清空并落盘、空队列 settled:0、**核算后回滚找得到日志行**、无冷却连调、不传 settleNow 不注册。
+
+---
+
 ## 已修复明细（供 review）
 
 - **A1** `log.js dateFor()`：改用本地 `getFullYear/getMonth/getDate`，禁用 `toISOString`。
@@ -219,6 +241,7 @@ GET /dsh-mood-changes/tick
 - **E9** `lib/log.js changeText()` + `lib/routes.js /log` 响应 `change` 字段 + `client.js` 变化列：块名+带符号数值（`怒+5`/`无聊-12`），状态行 `—`，回滚行 `回滚+0`；日志文件与回滚解析仍用纯数值，`delta` 字段保留。
 - **E10** `lib/statusbar.js _post()`：补 `id: randomUUID()`——注入的 `user/message` 缺 id 会过不了 host 存储校验，让世界归档整份拒绝打开、卡在那一行（2026-11-24 现场：seq 5048/5135 两条敲门消息）。
 - **E11** `lib/routes.js` 新增 `GET /dsh-mood-changes/tick`（可选 `onTick`，不传不注册）+ `index.js` 传入 `tick`：调试时立刻核算一次；返回 `{ok, lastTickAt, values, queue}`，出错回 `{ok:false, error}`。
+- **E12** `index.js settleQueueNow()` + `lib/tools.js mood_settle`：模型主动核算——只结算队列（delta + 传播 + 写日志 + 落盘），不衰减/不推进 tick/不跑思念无聊/不掷骰/不注入；无冷却，空队列 `settled:0`。`settleEntries()` 返回 logBatch 供工具回显。
 
 ## 功能缺口收账
 
