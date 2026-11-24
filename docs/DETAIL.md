@@ -37,7 +37,7 @@
 
 ## 注意
 
-- 需要本地跑一个能输出 JSON 的小模型（vLLM / LM Studio / Ollama 均可，3B 够用）
+- 需要本地跑一个能输出 JSON 的模型（vLLM / LM Studio / Ollama 均可）；**建议 7B 及以上，3B 及以下判得偏、不建议**
 - 数据在 `<worldDir>/mood/state.json`，日志在 `<worldDir>/room/情绪日志/`（04:00 切天）
 - 只记账，不替她说话、不写记忆
 - **多个 DSH 实例共用同一个判官没问题**（判官是无状态服务）；两个实例跑两个不同的「她」时，各自指各自的 worldDir 和语境文件即可

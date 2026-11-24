@@ -98,9 +98,9 @@ lexicon.json 的 237 词按旧语义（「他的情绪」）标注。降级路�
 
 session/event 当前收所有 session 的消息进判官窗口（与 statusBars 全 agent 口径一致）。若 subagent/workflow 产生 durable session，可能污染判官上下文——装后观察，必要时按 session 过滤。
 
-### 7B AWQ 未测
+### 判官模型选型：7B 起，3B 及以下不建议（2026-11-25 用户声明）
 
-`F:\ai\model_mood-judge\Qwen2.5-7B-AWQ` 下好未测；3B 判得准（hurt/shy/calm 都对），先不动。
+本机 2026-11-23 夜起跑 `Qwen2.5-7B-AWQ`（vLLM，端点 `127.0.0.1:8000`），效果比 3B 稳：反讽、语气强度、`about`（对谁）都判得更准。**不建议走 3B 及以下**——短句、反讽、强度容易判偏，判歪比判不出来更伤账；宁可让它给 `clear:false`、走词表兜底。7B AWQ 约 6GB 显存；没有 GPU 就别降级硬跑，直接用词表或换更小的云端端点。旧的 3B 模型仍在 `F:\ai\model_mood-judge\`，只作回退。
 
 ### fiber 重载数据热载不可靠（2026-11-23 深夜实测）
 
