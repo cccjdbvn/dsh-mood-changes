@@ -113,6 +113,18 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // 面板「上次掷骰」一行（2026-11-24 用户需求）：思念 / 无聊分别显示上次
+    // 掷骰命中与否、距现在多少分钟，如「思念：未掷中 · 524分钟前」。
+    // 夜间 23:00–07:00 停掷（服务端 rollNightPaused）→ 直接写「夜晚停掷」。
+    // lastRoll 为 0 = 还从没真正掷过骰（值没到阈值 / 有气无力）。
+    function rollText(label, info, nightPaused) {
+      if (nightPaused) return `${label}：夜晚停掷`;
+      const last = info?.lastRoll || 0;
+      if (!last) return `${label}：未掷过`;
+      const mins = Math.max(0, Math.floor((Date.now() - last) / 60000));
+      return `${label}：${info.lastRollHit ? '掷中' : '未掷中'} · ${mins}分钟前`;
+    }
+
     const cellStyle = {
       padding: '3px 6px', textAlign: 'left', fontSize: 11,
       color: 'var(--dsw-alias-text-primary, #d1d5db)',
@@ -199,6 +211,10 @@ window.__ModuleLoader__.load({
               h('div', { style: { borderTop: '1px solid var(--dsw-alias-border, #4b5563)', margin: '10px 0 8px', paddingTop: 6, fontSize: 11, color: 'var(--dsw-alias-text-secondary, #9ca3af)', letterSpacing: 1 } }, '思念 / 无聊'),
               h(EmotionBar, { key: 'missing', base: 'missing', label: '思念', value: state.missing?.value || 0, color: '#ec4899' }),
               h(EmotionBar, { key: 'boredom', base: 'boredom', label: '无聊', value: state.boredom?.value || 0, color: '#94a3b8' }),
+              // 上次掷骰状态（2026-11-24 用户需求）：一行小字，思念 / 无聊分列。
+              h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-text-secondary, #9ca3af)', margin: '2px 0 0' } },
+                `${rollText('思念', state.missing, state.rollNightPaused)}　　${rollText('无聊', state.boredom, state.rollNightPaused)}`
+              ),
               activeStates.length > 0 ? h('div', { style: { borderTop: '1px solid var(--dsw-alias-border, #4b5563)', paddingTop: 8, marginTop: 8 } },
                 h('div', { style: { fontSize: 12, fontWeight: 600, marginBottom: 4 } }, '激活状态'),
                 ...activeStates.map(x =>

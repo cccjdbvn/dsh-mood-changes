@@ -106,9 +106,11 @@ export function apply(ctx, config) {
     if (!state.missing) state.missing = { value: 0, lastDropAt: 0, lastNotifyAt: 0, lastRoll: 0, lastHitAt: 0, manualDay: '', manualSum: 0 };
     if (!state.missing.lastNotifyAt) state.missing.lastNotifyAt = 0;
     if (!state.missing.lastRoll) state.missing.lastRoll = 0;
+    if (state.missing.lastRollHit === undefined) state.missing.lastRollHit = false;
     if (!state.boredom) state.boredom = { value: 0, lastMsgAt: 0, lastToolAt: 0 };
     if (!state.boredom.lastNotifyAt) state.boredom.lastNotifyAt = 0;
     if (!state.boredom.lastRoll) state.boredom.lastRoll = 0;
+    if (state.boredom.lastRollHit === undefined) state.boredom.lastRollHit = false;
     // 工具侧窗口计数的回填（2026-11-23 起有）
     if (state.boredom.toolWindowStart === undefined) state.boredom.toolWindowStart = 0;
     if (state.boredom.toolWindowCount === undefined) state.boredom.toolWindowCount = 0;

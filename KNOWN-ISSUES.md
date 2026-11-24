@@ -1,7 +1,7 @@
-# dsh-mood 0.2.20 已知问题与优化清单
+# dsh-mood 0.2.21 已知问题与优化清单
 
-> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜 · E6 回滚撞车：2026-11-24 凌晨 · E7 批量回滚+标记：2026-11-24 凌晨 · E8 无聊互斥补漏：2026-11-24 上午 · E9 面板变化列显示：2026-11-24 上午 · E10 注入消息缺 id 卡死归档：2026-11-24 下午 · E11 /tick 调试核算接口：2026-11-24 下午 · E12 主动核算工具：2026-11-24 下午 · E13 注入只发她的会话：2026-11-24 下午 · E14 按工作目录自动认家：2026-11-24 下午 · E15 shy 标签改「害羞」：2026-11-24 下午 · E16 shy 亲近权重 乐 0.6/惧 0.4：2026-11-24 下午 · E17 面板日志按时间降序：2026-11-24 下午
-> 对应版本：0.2.20（0.2.2 + E1–E17）
+> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜 · E6 回滚撞车：2026-11-24 凌晨 · E7 批量回滚+标记：2026-11-24 凌晨 · E8 无聊互斥补漏：2026-11-24 上午 · E9 面板变化列显示：2026-11-24 上午 · E10 注入消息缺 id 卡死归档：2026-11-24 下午 · E11 /tick 调试核算接口：2026-11-24 下午 · E12 主动核算工具：2026-11-24 下午 · E13 注入只发她的会话：2026-11-24 下午 · E14 按工作目录自动认家：2026-11-24 下午 · E15 shy 标签改「害羞」：2026-11-24 下午 · E16 shy 亲近权重 乐 0.6/惧 0.4：2026-11-24 下午 · E17 面板日志按时间降序：2026-11-24 下午 · E18 面板显示上次掷骰：2026-11-24 晚
+> 对应版本：0.2.21（0.2.2 + E1–E18）
 > 行号以审计时文件为准，后续编辑会漂移，以问题描述定位为准。
 
 ---
@@ -44,12 +44,14 @@
 | E15 | 细情绪 `shy` 的中文标签是「害臊」，与它的状态名「害羞」不一致，日志/注入摘要读着别扭 | ✅ 已修复（0.2.18：`data/emotions.json` 的 `shy.label` 改「害羞」；纯文案，权重/状态/上限未动） |
 | E16 | 害羞对亲近的人只给乐 0.2 / 惧 0.8，乐的比重太低 | ✅ 已实现（0.2.19：`shy.weights` 改 **乐 0.6 / 惧 0.4**；`closeOnly` 不动，非亲近分支仍全部落惧） |
 | E17 | 胶囊日志按块反转文件顺序，最新的一笔不一定在最上面，读着得来回找时间 | ✅ 已实现（0.2.20：`/log` 响应按「记录时间」降序、跨块合并；同一分钟保持文件先后；日志 .md 排序不动） |
+| E18 | 胶囊面板看不到思念/无聊的掷骰状态：不知道上次掷没掷、中没中、多久前 | ✅ 已实现（0.2.21：面板加「上次掷骰」一行——思念/无聊各显示「掷中/未掷中 · N分钟前」，从没掷过写「未掷过」，夜间 23:00–07:00 写「夜晚停掷」；`shouldKnock` 记 `lastRollHit`，`/state` 透出 `lastRoll`/`lastRollHit`/`rollNightPaused`） |
 
-修复验证：run.mjs 9 项 + rollback 7 项 + rollback-collision 8 项（E6 端到端，含传播行场景）+ features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 18 项（E4/E8 端到端）+ batch-rollback 20 项（E7 端到端）+ mark-rollback 25 项（E7b 端到端）+ change-text 28 项（E9 端到端，含路由响应）+ statusbar-id 13 项（E10：id/UUID/唯一性/source/容错）+ tick-route 13 项（E11：注册/成功/错误/不传 onTick 兼容/state 回归）+ settle 30 项（E12：入队→主动核算→落盘→空队列→核算后回滚→无冷却→兼容）+ inject-scope 9 项（E13：状态条/敲门只发她、未配时全量、id/source 不回退）+ workspace-home 12 项（E14：选对家/排除归档与工作目录/subagent/fork/换会话跟上/没有家不投）+ log-order 13 项（E17：/log 按记录时间降序、同分钟保持文件序、块筛选仍降序、日志 .md 排序不动、无记录日期空数组）+ 判官真机（judge-test.mjs）；14 个 JS 文件 `node --check` 通过（合计 281 项断言）。
+修复验证：run.mjs 9 项 + rollback 7 项 + rollback-collision 8 项（E6 端到端，含传播行场景）+ features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 18 项（E4/E8 端到端）+ batch-rollback 20 项（E7 端到端）+ mark-rollback 25 项（E7b 端到端）+ change-text 28 项（E9 端到端，含路由响应）+ statusbar-id 13 项（E10：id/UUID/唯一性/source/容错）+ tick-route 13 项（E11：注册/成功/错误/不传 onTick 兼容/state 回归）+ settle 30 项（E12：入队→主动核算→落盘→空队列→核算后回滚→无冷却→兼容）+ inject-scope 9 项（E13：状态条/敲门只发她、未配时全量、id/source 不回退）+ workspace-home 12 项（E14：选对家/排除归档与工作目录/subagent/fork/换会话跟上/没有家不投）+ log-order 13 项（E17：/log 按记录时间降序、同分钟保持文件序、块筛选仍降序、日志 .md 排序不动、无记录日期空数组）+ roll-status 37 项（E18：掷骰记 lastRollHit、/state 透出、旧 state 兜底、夜晚停掷边界）+ 判官真机（judge-test.mjs）；14 个 JS 文件 `node --check` 通过（合计 318 项断言）。
 
 E15 为纯文案：`data/emotions.json` JSON 解析通过、41 条细名查重通过（无新增重名），未新增断言。
 E16 是权重表改动（数据），判句/传播/衰减逻辑未动；`features-test.mjs` 22 项仍全绿（含 closeOnly 两个分支）。
 E17 只改显示顺序（`/log` 响应排序 + client 去掉旧反转），日志 .md 的排序与内容都没动；全量 18 个脚本 281 项断言全绿。
+E18 只加记录字段和显示，不改掷骰概率/阈值/夜间窗口：`lastRollHit` 在 `shouldKnock` 里顺手记，`/state` 多三个字段，面板多一行小字；全量 19 个脚本 318 项断言全绿。
 
 ---
 
@@ -263,6 +265,23 @@ GET /dsh-mood-changes/tick
 **配置**：profile `cordis.patch.yml` 的 mood 段加了 `targetWorkspaceDir: 'F:\DSH\.dsh\worlds\lian\room'`（备份 `cordis.patch.yml.bak-20261124-workspacehome`；文件原来带 UTF-8 BOM，这次按 node 脚本写回时剥掉，YAML 解析已验证）。`targetSessionId` 留着当兜底。
 
 **回归**：新增 `_tmp/mood-smoke/workspace-home-test.mjs` 12 项——多候选里选中最新未归档根会话、已归档（即使活着）/工作目录/subagent/fork 都不投、状态条与敲门只发它、工作会话消息不入账、换会话后自动跟上（新会话被认、旧会话不再入账）、目录下没有家时谁也不投。
+
+---
+
+## 2026-11-24 晚：E18 面板显示「上次掷骰」（用户需求）
+
+**需求**：点开胶囊后加一行，像「思念：未掷中 · 524分钟前　　无聊：未掷中 · 218分钟前」；**夜里停掷的时候写「夜晚停掷」**。
+
+**数据从哪来**：判官只管六情，思念/无聊的「敲门」是插件自己的掷骰（`Missing.shouldKnock` / `Boredom.shouldKnock`，45 分钟一次、夜里不掷、≥80 直接命中）。原来 `shouldKnock` 只记 `lastRoll`（时间），**没记掷中没有**，面板拼不出这句话。
+
+**改法**：
+
+- `lib/missing.js` / `lib/boredom.js`：`shouldKnock` 里补 `lastRollHit = hit`（含 ≥80 直接命中那条分支）。掷骰概率、阈值、45 分钟 CD、夜间窗口一律不动。
+- `lib/store.js` / `index.js`：新旧 state 都补 `lastRollHit: false` 兜底（老文件没有这个字段）。
+- `lib/routes.js`：`/state` 的 `missing` / `boredom` 各加 `lastRoll` + `lastRollHit`；顶层加 `rollNightPaused`（导出 `isNightPaused(now)`，边界 23:00 起、07:00 止）。
+- `client.js`：两条 bar 下面加一行小字——`思念：掷中/未掷中 · N分钟前　　无聊：…`；从没掷过写「未掷过」；`rollNightPaused` 为真时两个都写「夜晚停掷」。
+
+**回归**：新增 `_tmp/mood-smoke/roll-status-test.mjs` 37 项——值不够/夜间不掷不动字段、45 分钟 CD、≥80 直接命中、随机未中（false 但 `lastRoll` 照样推进）、随机命中、思念/无聊两条链一致、夜晚停掷边界（22:59/23:00/06:59/07:00/15:00）、`/state` 透出三个字段、旧 state 兜底 0/false。
 
 ---
 
