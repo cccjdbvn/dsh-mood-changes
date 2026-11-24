@@ -1,5 +1,5 @@
 import Schema from '@deepseek-ai/schemastery';
-import { appendFileSync, watch } from 'node:fs';
+import { watch } from 'node:fs';
 import { join, normalize } from 'node:path';
 import { MoodStore } from './lib/store.js';
 import { MoodPool } from './lib/pool.js';
@@ -64,6 +64,69 @@ export function ownerFromSource(kind, text, names = []) {
   return isPrivate && names.includes(who);
 }
 
+/** QQ 桥注入消息的 source.kind（0.2.0 producer-owned 形状）。 */
+export const QQ_BRIDGE_KIND = 'plugin:dsh-qq-bridge';
+
+/** 判官单段文本的上限：只防长摘要把 vLLM 的小上下文撑爆，不改内容。 */
+function capJudgeText(s, max = 2000) {
+  const text = typeof s === 'string' ? s.trim() : '';
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/**
+ * 判句用的用户侧文本（E25，2026-11-25 用户明确：**只读，不拦截**）。
+ * QQ 桥注进来的消息原样读给判官 —— 不改写、不过滤、不改变消息流；
+ * 唯一的处理是长度上限（判官后端上下文很小，超长直接换词表就白判了）。
+ * 非 QQ 来源一个字不动。
+ * @param {string} kind - message.source.kind
+ * @param {string} text - 消息正文
+ * @returns {string} 给判官的文本
+ */
+export function judgeTextFor(kind, text) {
+  const raw = typeof text === 'string' ? text : '';
+  return kind === QQ_BRIDGE_KIND ? capJudgeText(raw) : raw;
+}
+
+/**
+ * 她这一轮用 qq_bridge_send 工具发去 QQ 的文本（E25，只读工具参数）。
+ * tools/result 的 exec.arguments 是工具参数对象（个别宿主给 JSON 串）。
+ * @param {object} exec - tools/result 的 ToolExec
+ * @returns {string} 发出的文本；不是这个工具/没正文 → ''
+ */
+export function qqSendTextOf(exec) {
+  if (!exec || exec.name !== 'qq_bridge_send') return '';
+  let args = exec.arguments;
+  if (typeof args === 'string') {
+    try { args = JSON.parse(args); } catch { return ''; }
+  }
+  return capJudgeText(typeof args?.text === 'string' ? args.text : '');
+}
+
+/**
+ * 拼判官这一轮的行（E25）：用户行 + 她的回复 + 她经 qq_bridge_send 发去
+ * QQ 的话（同一句已经在她回复里就不重复喂）。内容一律原样。
+ * @param {{text:string, judgeText?:string}[]} users
+ * @param {string} reply
+ * @param {string[]} sends
+ * @returns {string[]}
+ */
+export function buildRoundLines(users, reply, sends = []) {
+  const lines = [];
+  for (const u of users || []) {
+    const text = (u.judgeText ?? u.text ?? '').trim();
+    if (text) lines.push(`用户：${text}`);
+  }
+  const herText = (typeof reply === 'string' ? reply : '').trim();
+  if (herText) lines.push(`她：${herText}`);
+  for (const sent of sends || []) {
+    const s = String(sent || '').trim();
+    if (!s) continue;
+    if (herText && herText.includes(s)) continue;
+    lines.push(`她（QQ 发出）：${s}`);
+  }
+  return lines;
+}
+
 export function apply(ctx, config) {
   const worldDir = config.worldDir;
   if (!worldDir) {
@@ -107,8 +170,9 @@ export function apply(ctx, config) {
 
   // Per-session turn bookkeeping (one emotion pool, many sessions):
   // user messages collected during the open turn + her streamed reply.
-  const turnUserTexts = new Map(); // sessionId -> [{text, isOwner}]
+  const turnUserTexts = new Map(); // sessionId -> [{text, isOwner, judgeText}]
   const pendingReplies = new Map(); // sessionId -> string
+  const qqSends = new Map(); // sessionId -> string[]（这一轮 qq_bridge_send 发出的文本）
 
   // Summary bookkeeping ("搭车"): reset on every injection (status bar or
   // knock), rendered only when a knock fires.
@@ -529,9 +593,10 @@ export function apply(ctx, config) {
     const isOwner = ownerFromSource(kind, text, ownerNames);
 
     // Collect for the open turn (fed to the judge at turn/end).
+    // judgeText 是清掉 QQ 桥脚手架后的正文（E25）；text 原样留着给主人判定。
     let users = turnUserTexts.get(sessionId);
     if (!users) { users = []; turnUserTexts.set(sessionId, users); }
-    users.push({ text, isOwner });
+    users.push({ text, isOwner, judgeText: judgeTextFor(kind, text) });
 
     const logBatch = [];
 
@@ -590,13 +655,15 @@ export function apply(ctx, config) {
 
     const users = turnUserTexts.get(sessionId) || [];
     const reply = pendingReplies.get(sessionId) || '';
+    const sends = qqSends.get(sessionId) || [];
     turnUserTexts.delete(sessionId);
     pendingReplies.delete(sessionId);
+    qqSends.delete(sessionId);
 
-    const userTexts = users.map(u => u.text).filter(t => t && t.trim());
-    const roundLines = [];
-    for (const t of userTexts) roundLines.push(`用户：${t}`);
-    if (reply) roundLines.push(`她：${reply}`);
+    // E25：QQ 桥注入的消息原样读进判句，她经 qq_bridge_send 发去 QQ 的话
+    // 也算她说的 —— 两条都只读，不改写、不拦截。
+    const roundLines = buildRoundLines(users, reply, sends);
+    const userTexts = users.map(u => u.judgeText ?? u.text).filter(t => t && t.trim());
 
     // The judge's second-level window is the rounds BEFORE this one; capture
     // it before this round enters the context.
@@ -608,7 +675,8 @@ export function apply(ctx, config) {
     // She did not speak this turn → no sampling point (user decision
     // 2026-11-23: judge fires each time SHE speaks; her silence keeps the
     // user lines in the window for the next round's second-level look).
-    if (!reply) return;
+    // 只在工具里说话（qq_bridge_send）也算她说了。
+    if (!reply && sends.length === 0) return;
 
     const roundText = roundLines.join('\n');
     const fallbackText = userTexts.join('\n');
@@ -774,6 +842,7 @@ export function apply(ctx, config) {
   const offSessionDisposed = ctx.on('session/disposed', (session) => {
     turnUserTexts.delete(session?.id);
     pendingReplies.delete(session?.id);
+    qqSends.delete(session?.id);
   });
 
   // --- Agent lifecycle (status bars only; judging lives on session/event) ---
@@ -833,33 +902,37 @@ export function apply(ctx, config) {
     ctx.logger?.warn?.('[dsh-mood-changes] settings API registration error:', e);
   }
 
-  // --- Tools/result → boredom drop ---
+  // --- Tools/result → boredom drop + qq_bridge_send 截给判官 ---
   // 会话归属判定（用户 2026-11-23）：思念/无聊的降值只认她的会话——别的会话
   // （比如工作会话）调工具不再降她的无聊。tools/result 是 Scoped<ToolsService>
   // 事件，this 绑定发起 agent 的 scope；多路径提取 sessionId，取不到时维持
-  // 旧行为（降），取到且不是她的会话则跳过。附带一次性诊断日志（形状确认后删）。
+  // 旧行为（降），取到且不是她的会话则跳过。
   const offToolsResult = ctx.on('tools/result', function (exec) {
     if (!state) return;
     let sessionId = null;
-    let source = 'none';
     try {
       const scoped = this;
-      if (scoped?.scope?.session?.id) { sessionId = scoped.scope.session.id; source = 'this.scope.session.id'; }
-      else if (scoped?.session?.id) { sessionId = scoped.session.id; source = 'this.session.id'; }
-      else if (exec?.agent?.session?.id) { sessionId = exec.agent.session.id; source = 'exec.agent.session.id'; }
-      else if (exec?.agent?.id) { sessionId = exec.agent.id; source = 'exec.agent.id'; }
-      else if (exec?.sessionId) { sessionId = exec.sessionId; source = 'exec.sessionId'; }
-    } catch {}
-    // TEMP DIAG（本机一次性诊断，结构确认后删除）
-    try {
-      appendFileSync('F:/DSH/work/_tmp/tools-result-shape.log',
-        `${new Date().toISOString()} source=${source} sessionId=${sessionId} execKeys=${Object.keys(exec || {}).slice(0, 20).join('|')}\n`);
+      if (scoped?.scope?.session?.id) sessionId = scoped.scope.session.id;
+      else if (scoped?.session?.id) sessionId = scoped.session.id;
+      else if (exec?.agent?.session?.id) sessionId = exec.agent.session.id;
+      else if (exec?.agent?.id) sessionId = exec.agent.id;
+      else if (exec?.sessionId) sessionId = exec.sessionId;
     } catch {}
     if (hasSessionRestriction() && sessionId) {
       const target = targetSessionId();
       if (!target || String(sessionId) !== target) return;
     }
     const now = Date.now();
+    // E25（2026-11-25 用户要求）：她这一轮用 qq_bridge_send 发去 QQ 的话，
+    // 也截下来在 turn/end 喂判官 —— 工具调用不进 assistant/message，否则
+    // 判官只看到她「没说话」。
+    const sentText = qqSendTextOf(exec);
+    if (sentText && sessionId) {
+      const list = qqSends.get(sessionId) || [];
+      list.push(sentText);
+      if (list.length > 5) list.splice(0, list.length - 5);
+      qqSends.set(sessionId, list);
+    }
     // 2026-11-23 工具侧窗口衰减（用户拍板）：窗口内第 1 次 ×0.6（照旧冷却），
     // 第 5 次追加一次 ×0.6（跳过冷却）；每窗口最多两次。
     const { first, second } = Boredom.onToolCall(state.boredom, now, tuning);
