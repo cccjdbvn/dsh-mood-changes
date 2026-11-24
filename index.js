@@ -11,8 +11,9 @@ import { Missing } from './lib/missing.js';
 import { Boredom } from './lib/boredom.js';
 import { States } from './lib/states.js';
 import { StatusBar } from './lib/statusbar.js';
+import { DEFAULT_TUNING, loadTuning } from './lib/tuning.js';
 import { registerRoutes } from './lib/routes.js';
-import { registerTools } from './lib/tools.js';
+import { registerSettingsRoutes } from './lib/config-api.js';import { registerTools } from './lib/tools.js';
 
 export const Config = Schema.object({
   worldDir: Schema.string().default('').description('世界目录路径（存放 state 和日志）；留空 = 插件不启动'),
@@ -54,6 +55,10 @@ export function apply(ctx, config) {
 
   // Mutable state (loaded from disk on start)
   let state = null;
+
+  // 运行参数（2026-11-24）：思念/无聊的增速、衰减冷却、夜间窗口。
+  // 存 worldDir/mood/tuning.json，设置页改完即时生效（不重启插件）。
+  let tuning = JSON.parse(JSON.stringify(DEFAULT_TUNING));
 
   // Single source of truth for the baseline: the mood_baseline tool writes
   // into this ref, and tick() reads from it (KNOWN-ISSUES A3).
@@ -101,6 +106,7 @@ export function apply(ctx, config) {
   async function init() {
     state = await store.loadState();
     baselineRef.current = await store.loadBaseline();
+    tuning = await loadTuning(worldDir);
     if (!state.queue) state.queue = [];
     // Backfill newer fields on old state files.
     if (!state.missing) state.missing = { value: 0, lastDropAt: 0, lastNotifyAt: 0, lastRoll: 0, lastHitAt: 0, manualDay: '', manualSum: 0 };
@@ -289,7 +295,7 @@ export function apply(ctx, config) {
     if (States.hasSkipRoll(state.states)) return;
 
     const m = state.missing;
-    if (!(m.lastNotifyAt && now - m.lastNotifyAt < 60 * 60000) && Missing.shouldKnock(m, now)) {
+    if (!(m.lastNotifyAt && now - m.lastNotifyAt < 60 * 60000) && Missing.shouldKnock(m, now, tuning)) {
       m.lastNotifyAt = now;
       const v = (m.value || 0).toFixed(1);
       knock(m.value >= 80
@@ -298,7 +304,7 @@ export function apply(ctx, config) {
     }
 
     const b = state.boredom;
-    if (!(b.lastNotifyAt && now - b.lastNotifyAt < 60 * 60000) && Boredom.shouldKnock(b, now)) {
+    if (!(b.lastNotifyAt && now - b.lastNotifyAt < 60 * 60000) && Boredom.shouldKnock(b, now, tuning)) {
       b.lastNotifyAt = now;
       knock(`无聊 ${(b.value || 0).toFixed(1)}，要不要自己做点什么？`, now);
     }
@@ -330,10 +336,10 @@ export function apply(ctx, config) {
     // 4. Missing & Boredom tick
     const missingGain = States.missingGainMultiplier(state.states);
     const missingStep = States.missingStepBonus(state.states);
-    const missingResult = Missing.tick(state.missing, now, missingGain, missingStep);
+    const missingResult = Missing.tick(state.missing, now, missingGain, missingStep, tuning);
 
     const boredomStep = States.boredomStepBonus(state.states);
-    Boredom.tick(state.boredom, now, boredomStep);
+    Boredom.tick(state.boredom, now, boredomStep, tuning);
 
     if (missingResult.crossedThreshold) {
       fireAndForget(log.append({
@@ -524,7 +530,7 @@ export function apply(ctx, config) {
     const logBatch = [];
 
     // Boredom drop: any message → ×0.7
-    const boredomDrop = Boredom.drop(state.boredom, now, 'msg');
+    const boredomDrop = Boredom.drop(state.boredom, now, 'msg', tuning);
     if (boredomDrop > 0) {
       logBatch.push({
         ts: now, block: '无聊', emotion: '无聊',
@@ -536,7 +542,7 @@ export function apply(ctx, config) {
     // Missing drop: only owner. A real drop is a state change worth
     // persisting at once (not through the 3-min throttle).
     if (isOwner) {
-      const dropped = Missing.drop(state.missing, now);
+      const dropped = Missing.drop(state.missing, now, tuning);
       if (dropped > 0) {
         stateDirty = false;
         lastStateSaveAt = now;
@@ -801,9 +807,24 @@ export function apply(ctx, config) {
   // --- Register HTTP routes ---
   let routeDisposers = [];
   try {
-    routeDisposers = registerRoutes(ctx, store, baselineRef, () => state, tick);
+    routeDisposers = registerRoutes(ctx, store, baselineRef, () => state, tick, () => tuning);
   } catch (e) {
     ctx.logger?.warn?.('[dsh-mood-changes] route registration error:', e);
+  }
+
+  // --- Settings page API (E19) ---
+  // 客户端 settings.plugins.tab 的配置页由插件自己注册；这一层供设置页读写
+  // 插件配置（profile）、运行参数（tuning.json，即时生效）和情绪基线（baseline.json）。
+  try {
+    routeDisposers.push(...registerSettingsRoutes(ctx, {
+      config,
+      worldDir,
+      store,
+      getTuning: () => tuning,
+      setTuning: (next) => { tuning = next; },
+    }));
+  } catch (e) {
+    ctx.logger?.warn?.('[dsh-mood-changes] settings API registration error:', e);
   }
 
   // --- Tools/result → boredom drop ---
@@ -835,7 +856,7 @@ export function apply(ctx, config) {
     const now = Date.now();
     // 2026-11-23 工具侧窗口衰减（用户拍板）：窗口内第 1 次 ×0.6（照旧冷却），
     // 第 5 次追加一次 ×0.6（跳过冷却）；每窗口最多两次。
-    const { first, second } = Boredom.onToolCall(state.boredom, now);
+    const { first, second } = Boredom.onToolCall(state.boredom, now, tuning);
     if (first > 0 || second > 0) {
       const batch = [];
       if (first > 0) {

@@ -280,6 +280,268 @@ window.__ModuleLoader__.load({
       return h(MoodCard);
     }
 
+    // ── settings tab (settings.plugins.tab, E19) ──
+    // 2026-11-24 起插件配置页不再自动生成，插件自己注册一个 tab。配置存在
+    // profile 的 cordis.patch.yml 里，客户端通过宿主半的
+    // /dsh-mood-changes/config 读写；保存会让插件重载，所以保存完稍等再刷新。
+    function fieldText(field, value) {
+      if (field.kind === 'list') return Array.isArray(value) ? value.join('，') : '';
+      return value == null ? '' : String(value);
+    }
+
+    function parseDraft(field, text) {
+      if (field.kind === 'number') {
+        const t = String(text ?? '').trim();
+        if (t === '') return { blank: true, value: null };
+        const n = Number(t);
+        return Number.isFinite(n) ? { blank: false, value: n } : { error: '必须是数字' };
+      }
+      if (field.kind === 'list') {
+        const list = String(text ?? '').split(/[,，]/).map(s => s.trim()).filter(Boolean);
+        return { blank: list.length === 0, value: list };
+      }
+      const s = String(text ?? '');
+      return { blank: s.trim() === '', value: s };
+    }
+
+    const settingsInputStyle = {
+      width: '100%', boxSizing: 'border-box',
+      background: 'var(--dsw-alias-bg-secondary, #374151)',
+      color: 'var(--dsw-alias-text-primary, #d1d5db)',
+      border: '1px solid var(--dsw-alias-border, #4b5563)',
+      borderRadius: 6, padding: '4px 8px', fontSize: 12, fontFamily: 'inherit',
+    };
+
+    const settingsButtonStyle = {
+      background: 'none', border: '1px solid var(--dsw-alias-border, #4b5563)', borderRadius: 6,
+      color: 'var(--dsw-alias-text-primary, #d1d5db)', padding: '3px 12px', fontSize: 12,
+      cursor: 'pointer', fontFamily: 'inherit',
+    };
+
+    function SettingsField({ field, value, onChange }) {
+      return h('div', { style: { marginBottom: 10 } },
+        h('div', { style: { marginBottom: 3 } }, field.label),
+        h('input', {
+          value: value ?? '',
+          onChange: e => onChange(e.target.value),
+          style: settingsInputStyle,
+        }),
+        field.description
+          ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginTop: 2 } }, field.description)
+          : null,
+      );
+    }
+
+    const BASE_NAMES = { happy: '乐', sad: '悲', fear: '惧', anger: '怒', surprise: '惊', disgust: '厌' };
+    const SETTINGS_BASE_ORDER = ['happy', 'sad', 'fear', 'anger', 'surprise', 'disgust'];
+
+    function MoodSettingsTab() {
+      const [config, setConfig] = useState(null);
+      const [configDraft, setConfigDraft] = useState({});
+      const [tuning, setTuning] = useState(null);
+      const [tuningDraft, setTuningDraft] = useState({});
+      const [baseline, setBaseline] = useState(null);
+      const [baselineDraft, setBaselineDraft] = useState({});
+      const [error, setError] = useState('');
+      const [notice, setNotice] = useState('');
+      const [busy, setBusy] = useState('');
+
+      const loadAll = useCallback(async () => {
+        setError('');
+        try {
+          const [cr, tr, br] = await Promise.all([
+            fetch('/dsh-mood-changes/config', { cache: 'no-store' }),
+            fetch('/dsh-mood-changes/tuning', { cache: 'no-store' }),
+            fetch('/dsh-mood-changes/baseline', { cache: 'no-store' }),
+          ]);
+          const [cb, tb, bb] = await Promise.all([cr.json(), tr.json(), br.json()]);
+          if (!cb.ok) throw new Error(cb.error || '读取插件配置失败');
+          if (!tb.ok) throw new Error(tb.error || '读取运行参数失败');
+          if (!bb.ok) throw new Error(bb.error || '读取基线失败');
+
+          setConfig(cb);
+          const cd = {};
+          for (const field of cb.fields) cd[field.key] = fieldText(field, cb.values[field.key]);
+          setConfigDraft(cd);
+
+          setTuning(tb);
+          const td = {};
+          for (const field of tb.fields) td[field.path] = String(tb.values[field.path] ?? '');
+          setTuningDraft(td);
+
+          setBaseline(bb);
+          const bd = {};
+          for (const key of SETTINGS_BASE_ORDER) bd[key] = String(bb.values[key] ?? '');
+          setBaselineDraft(bd);
+        } catch (e) {
+          setError(String(e?.message || e));
+        }
+      }, []);
+
+      useEffect(() => { loadAll(); }, [loadAll]);
+
+      const saveConfig = async () => {
+        if (!config) return;
+        const set = {};
+        const unset = [];
+        for (const field of config.fields) {
+          const parsed = parseDraft(field, configDraft[field.key]);
+          if (parsed.error) { setError(`${field.label}：${parsed.error}`); return; }
+          const before = config.values[field.key];
+          const same = parsed.blank
+            ? (Array.isArray(before) ? before.length === 0 : before === '')
+            : JSON.stringify(parsed.value) === JSON.stringify(before);
+          if (same) continue;
+          if (parsed.blank) unset.push(field.key);
+          else set[field.key] = parsed.value;
+        }
+        if (Object.keys(set).length === 0 && unset.length === 0) { setNotice('插件配置没有改动'); return; }
+        setBusy('config');
+        setError('');
+        setNotice('');
+        try {
+          const resp = await fetch('/dsh-mood-changes/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ set, unset }),
+          });
+          const body = await resp.json();
+          if (!body.ok) throw new Error(body.error || '保存失败');
+          setNotice('插件配置已保存，插件正在重载…');
+          setTimeout(() => { loadAll(); }, 2500);
+        } catch (e) {
+          setError(String(e?.message || e));
+        } finally {
+          setBusy('');
+        }
+      };
+
+      const saveTuning = async () => {
+        if (!tuning) return;
+        const set = {};
+        for (const field of tuning.fields) {
+          const text = String(tuningDraft[field.path] ?? '').trim();
+          if (text === '') { setError(`${field.label} 不能为空`); return; }
+          const value = Number(text);
+          if (!Number.isFinite(value)) { setError(`${field.label} 必须是数字`); return; }
+          if (value !== Number(tuning.values[field.path])) set[field.path] = value;
+        }
+        if (Object.keys(set).length === 0) { setNotice('运行参数没有改动'); return; }
+        setBusy('tuning');
+        setError('');
+        setNotice('');
+        try {
+          const resp = await fetch('/dsh-mood-changes/tuning', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ set }),
+          });
+          const body = await resp.json();
+          if (!body.ok) throw new Error(body.error || '保存失败');
+          setTuning(body);
+          const td = {};
+          for (const field of body.fields) td[field.path] = String(body.values[field.path] ?? '');
+          setTuningDraft(td);
+          setNotice('运行参数已保存，下一跳 tick 起生效');
+        } catch (e) {
+          setError(String(e?.message || e));
+        } finally {
+          setBusy('');
+        }
+      };
+
+      const saveBaseline = async () => {
+        const values = {};
+        for (const key of SETTINGS_BASE_ORDER) {
+          const text = String(baselineDraft[key] ?? '').trim();
+          const value = Number(text);
+          if (text === '' || !Number.isFinite(value)) { setError(`${BASE_NAMES[key]} 必须是数字`); return; }
+          values[key] = value;
+        }
+        setBusy('baseline');
+        setError('');
+        setNotice('');
+        try {
+          const resp = await fetch('/dsh-mood-changes/baseline', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ values }),
+          });
+          const body = await resp.json();
+          if (!body.ok) throw new Error(body.error || '保存失败');
+          setBaseline(body);
+          setNotice('基线已保存；低于新基线的当前值会被补齐');
+        } catch (e) {
+          setError(String(e?.message || e));
+        } finally {
+          setBusy('');
+        }
+      };
+
+      const sectionTitle = { fontSize: 12, fontWeight: 600, margin: '14px 0 6px', paddingTop: 8, borderTop: '1px solid var(--dsw-alias-border, #4b5563)' };
+      const subTitle = { fontSize: 11, color: 'var(--dsw-alias-text-secondary, #9ca3af)', margin: '6px 0 4px', letterSpacing: 1 };
+      const groups = tuning ? [...new Set(tuning.fields.map(f => f.group))] : [];
+
+      return h('div', { style: { padding: '4px 2px', fontSize: 12 } },
+        h('div', { style: { fontSize: 13, fontWeight: 600, marginBottom: 6 } }, '情绪插件'),
+        h('div', { style: { color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginBottom: 10, lineHeight: 1.5 } },
+          '插件配置保存后插件会重载；运行参数和基线保存即生效。留空 = 用默认值。'
+        ),
+        error ? h('div', { style: { color: '#f87171', marginBottom: 8 } }, error) : null,
+        !config || !tuning || !baseline
+          ? h('div', { style: { color: 'var(--dsw-alias-text-secondary, #9ca3af)' } }, '读取中…')
+          : h('div', null,
+              // ── 插件配置 ──
+              h('div', { style: { fontSize: 12, fontWeight: 600, margin: '4px 0 8px' } }, '插件配置'),
+              ...config.fields.map(field => h(SettingsField, {
+                key: field.key,
+                field,
+                value: configDraft[field.key] ?? '',
+                onChange: (text) => setConfigDraft(prev => ({ ...prev, [field.key]: text })),
+              })),
+              h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 } },
+                h('button', { onClick: saveConfig, disabled: busy === 'config', style: settingsButtonStyle }, busy === 'config' ? '保存中…' : '保存插件配置'),
+                h('button', { onClick: loadAll, disabled: Boolean(busy), style: settingsButtonStyle }, '重新读取'),
+              ),
+              config.editable === false
+                ? h('div', { style: { color: '#fbbf24', marginTop: 6 } }, '当前 profile 里写不了插件配置（configEditor 不可用），这里只能看不能改。')
+                : null,
+
+              // ── 运行参数（按增速 / 衰减 / 冷却 / 夜间分块） ──
+              h('div', { style: sectionTitle }, '运行参数'),
+              ...groups.map(group => h('div', { key: group },
+                h('div', { style: subTitle }, group),
+                ...tuning.fields.filter(field => field.group === group).map(field => h(SettingsField, {
+                  key: field.path,
+                  field,
+                  value: tuningDraft[field.path] ?? '',
+                  onChange: (text) => setTuningDraft(prev => ({ ...prev, [field.path]: text })),
+                })),
+              )),
+              h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 } },
+                h('button', { onClick: saveTuning, disabled: busy === 'tuning', style: settingsButtonStyle }, busy === 'tuning' ? '保存中…' : '保存运行参数'),
+              ),
+
+              // ── 情绪基线 ──
+              h('div', { style: sectionTitle }, '情绪基线'),
+              h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 } },
+                ...SETTINGS_BASE_ORDER.map(key => h('div', { key },
+                  h('div', { style: { marginBottom: 2 } }, BASE_NAMES[key]),
+                  h('input', {
+                    value: baselineDraft[key] ?? '',
+                    onChange: e => setBaselineDraft(prev => ({ ...prev, [key]: e.target.value })),
+                    style: settingsInputStyle,
+                  }),
+                )),
+              ),
+              h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
+                h('button', { onClick: saveBaseline, disabled: busy === 'baseline', style: settingsButtonStyle }, busy === 'baseline' ? '保存中…' : '保存基线'),
+                notice ? h('span', { style: { color: 'var(--dsw-alias-text-secondary, #9ca3af)' } }, notice) : null,
+              ),
+            ),
+      );
+    }
+
     return {
       inject: ['slots'],
       apply(ctx) {
@@ -303,6 +565,12 @@ window.__ModuleLoader__.load({
         ctx.slots.inject('shell.overlay', () => ctx.slots.register({
           name: 'shell.overlay', id: 'dsh-mood-changes-card', order: 100,
         }, MoodOverlay));
+
+        // 设置页的「情绪插件」tab（E19，2026-11-24）：插件配置页不再自动生成，
+        // 由插件自己往 settings.plugins.tab 注册一个 tab。
+        ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
+          name: 'settings.plugins.tab', id: 'dsh-mood-changes', order: 90, label: () => '情绪插件',
+        }, MoodSettingsTab));
       },
     };
   },
