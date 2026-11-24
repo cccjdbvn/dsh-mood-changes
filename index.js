@@ -325,7 +325,7 @@ export function apply(ctx, config) {
     // 1. Decay toward the CURRENT baseline (A3), holding skipDecay bases
     //    (「轻快」: happy skips 2 ticks of decay).
     const skipBases = States.consumeSkipDecay(state.states, now);
-    state.values = MoodPool.decay(state.values, baselineRef.current, dtMs, skipBases);
+    state.values = MoodPool.decay(state.values, baselineRef.current, dtMs, skipBases, tuning);
 
     // 2. Settle the event queue (apply + propagate)
     settleEntries(store.drainQueue(state), now);
@@ -799,7 +799,7 @@ export function apply(ctx, config) {
       lastStateSaveAt = Date.now();
       await store.saveState(state);
     };
-    toolDisposers = registerTools(ctx, store, baselineRef, () => state, saveNow, settleQueueNow);
+    toolDisposers = registerTools(ctx, store, baselineRef, () => state, saveNow, settleQueueNow, () => tuning);
   } catch (e) {
     ctx.logger?.warn?.('[dsh-mood-changes] tool registration error:', e);
   }

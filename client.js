@@ -318,13 +318,16 @@ window.__ModuleLoader__.load({
       cursor: 'pointer', fontFamily: 'inherit',
     };
 
-    function SettingsInput({ label, value, onChange, description }) {
+    function SettingsInput({ label, value, onChange, description, accent }) {
+      const inputStyle = accent
+        ? { ...settingsInputStyle, borderColor: accent + '66', caretColor: accent }
+        : settingsInputStyle;
       return h('div', { style: { marginBottom: 10 } },
         h('div', { style: { marginBottom: 3 } }, label),
         h('input', {
           value: value ?? '',
           onChange: e => onChange(e.target.value),
-          style: settingsInputStyle,
+          style: inputStyle,
         }),
         description
           ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginTop: 2 } }, description)
@@ -335,24 +338,17 @@ window.__ModuleLoader__.load({
     const BASE_NAMES = { happy: '乐', sad: '悲', fear: '惧', anger: '怒', surprise: '惊', disgust: '厌' };
     const SETTINGS_BASE_ORDER = ['happy', 'sad', 'fear', 'anger', 'surprise', 'disgust'];
 
-    // 设置页分块（E21，2026-11-24 用户需求）：照世界控制台的卡片墙——每一类一张卡片，
-    // 点进去单独改、单独保存；不再把所有字段平铺成一张长表单。
+    // 设置页分块（E21 → E22，2026-11-24 用户需求）：照世界控制台——顶部横向页签，
+    // 一个类一块，点哪个改哪个；每类一个主题色，别太单调。
     const SETTINGS_SECTIONS = [
-      { id: 'config', title: '插件配置' },
-      { id: 'growth', title: '增速' },
-      { id: 'decay', title: '衰减' },
-      { id: 'cooldown', title: '冷却' },
-      { id: 'night', title: '夜间' },
-      { id: 'baseline', title: '情绪基线' },
+      { id: 'config', title: '插件配置', color: '#94a3b8' },
+      { id: 'growth', title: '增速', color: '#34d399' },
+      { id: 'decay', title: '衰减', color: '#fb923c' },
+      { id: 'cooldown', title: '冷却', color: '#60a5fa' },
+      { id: 'night', title: '夜间', color: '#a78bfa' },
+      { id: 'baseline', title: '情绪基线', color: '#f472b6' },
     ];
     const TUNING_GROUP_BY_ID = { growth: '增速', decay: '衰减', cooldown: '冷却', night: '夜间' };
-
-    const settingsCardStyle = {
-      background: 'var(--dsw-alias-bg-secondary, rgba(255,255,255,0.03))',
-      border: '1px solid var(--dsw-alias-border, #4b5563)',
-      borderRadius: 10, padding: '12px 14px', cursor: 'pointer',
-      display: 'flex', flexDirection: 'column', gap: 6, minHeight: 84, boxSizing: 'border-box',
-    };
 
     function MoodSettingsTab() {
       const [config, setConfig] = useState(null);
@@ -364,7 +360,7 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('');
       const [notice, setNotice] = useState('');
       const [busy, setBusy] = useState('');
-      const [view, setView] = useState('home');
+      const [view, setView] = useState('config');
 
       const loadAll = useCallback(async () => {
         setError('');
@@ -504,41 +500,14 @@ window.__ModuleLoader__.load({
         return saveTuningGroup(TUNING_GROUP_BY_ID[id]);
       };
 
-      // 卡片上的摘要：一眼看到这一类的现状。
-      const summaryOf = (id) => {
-        if (!config || !tuning || !baseline) return '读取中…';
-        if (id === 'config') {
-          const model = config.values.judgeModel || '未配判官模型';
-          const home = config.values.targetWorkspaceDir
-            ? '按目录认家'
-            : (config.values.targetSessionId ? '按会话 id 认家' : '所有会话都算');
-          return `${model}\n${home}`;
-        }
-        if (id === 'growth') {
-          return `思念 ${tuning.values['missing.baseGrowth']} /跳\n无聊 ${tuning.values['boredom.baseGrowth']} /跳`;
-        }
-        if (id === 'decay') {
-          return `思念 ×${tuning.values['missing.dropFactor']}\n消息 ×${tuning.values['boredom.msgFactor']} · 工具 ×${tuning.values['boredom.toolFactor']}`;
-        }
-        if (id === 'cooldown') {
-          return `思念降值 ${tuning.values['missing.dropCooldownMs']} 分\n同类型 ${tuning.values['boredom.sameTypeCooldownMs']} 分 · 跨类型 ${tuning.values['boredom.crossTypeCooldownMs']} 分`;
-        }
-        if (id === 'night') {
-          return `${tuning.values['night.startHour']}:00 – ${tuning.values['night.endHour']}:00\n夜间不涨无聊、不掷骰、思念减速`;
-        }
-        if (id === 'baseline') {
-          return SETTINGS_BASE_ORDER.map(key => `${BASE_NAMES[key]} ${baseline.values[key]}`).join(' · ');
-        }
-        return '';
-      };
-
-      const fieldsFor = (id) => {
+      const fieldsFor = (id, accent) => {
         if (id === 'config') {
           return config.fields.map(field => h(SettingsInput, {
             key: field.key,
             label: field.label,
             value: configDraft[field.key] ?? '',
             description: field.description,
+            accent,
             onChange: (text) => setConfigDraft(prev => ({ ...prev, [field.key]: text })),
           }));
         }
@@ -549,7 +518,7 @@ window.__ModuleLoader__.load({
               h('input', {
                 value: baselineDraft[key] ?? '',
                 onChange: e => setBaselineDraft(prev => ({ ...prev, [key]: e.target.value })),
-                style: settingsInputStyle,
+                style: { ...settingsInputStyle, borderColor: accent + '66', caretColor: accent },
               }),
             )),
           )];
@@ -560,50 +529,57 @@ window.__ModuleLoader__.load({
           label: field.label,
           value: tuningDraft[field.path] ?? '',
           description: field.description,
+          accent,
           onChange: (text) => setTuningDraft(prev => ({ ...prev, [field.path]: text })),
         }));
       };
 
-      const title = SETTINGS_SECTIONS.find(section => section.id === view)?.title || '情绪插件';
-      const cardTitleStyle = { fontSize: 13, fontWeight: 600, paddingBottom: 4, marginBottom: 2, borderBottom: '1px dashed var(--dsw-alias-border, #4b5563)' };
+      const active = SETTINGS_SECTIONS.find(section => section.id === view) || SETTINGS_SECTIONS[0];
 
       return h('div', { style: { padding: '4px 2px', fontSize: 12 } },
         error ? h('div', { style: { color: '#f87171', marginBottom: 8 } }, error) : null,
         !config || !tuning || !baseline
           ? h('div', { style: { color: 'var(--dsw-alias-text-secondary, #9ca3af)' } }, '读取中…')
-          : view === 'home'
-            ? h('div', null,
-                h('div', { style: { fontSize: 13, fontWeight: 600, marginBottom: 4 } }, '情绪插件'),
-                h('div', { style: { color: 'var(--dsw-alias-text-secondary, #9ca3af)', marginBottom: 12, lineHeight: 1.5 } },
-                  '点一张卡片进入，逐类单独改。运行参数和基线保存即生效；插件配置保存后插件重载。'
-                ),
-                h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 } },
-                  ...SETTINGS_SECTIONS.map(section => h('div', {
-                    key: section.id,
-                    onClick: () => { setError(''); setNotice(''); setView(section.id); },
-                    style: settingsCardStyle,
+          : h('div', null,
+              h('div', { style: { fontSize: 13, fontWeight: 600, marginBottom: 8 } }, '情绪插件'),
+              // 横向页签（E22，照世界控制台）：一行排开，当前类下划线用主题色。
+              h('div', {
+                style: {
+                  display: 'flex', gap: 20, marginBottom: 12, overflowX: 'auto',
+                  borderBottom: '1px solid var(--dsw-alias-border, #4b5563)',
+                },
+              },
+                ...SETTINGS_SECTIONS.map(section => h('button', {
+                  key: section.id,
+                  onClick: () => { setError(''); setNotice(''); setView(section.id); },
+                  style: {
+                    background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                    padding: '6px 2px', marginBottom: -1, fontSize: 12, whiteSpace: 'nowrap',
+                    color: view === section.id ? section.color : 'var(--dsw-alias-text-secondary, #9ca3af)',
+                    fontWeight: view === section.id ? 600 : 400,
+                    borderBottom: `2px solid ${view === section.id ? section.color : 'transparent'}`,
                   },
-                    h('div', { style: cardTitleStyle }, `— ${section.title}`),
-                    h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-text-secondary, #9ca3af)', lineHeight: 1.6, whiteSpace: 'pre-line' } },
-                      summaryOf(section.id)),
-                  )),
-                ),
-              )
-            : h('div', null,
-                h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } },
-                  h('button', { onClick: () => { setError(''); setNotice(''); setView('home'); }, style: settingsButtonStyle }, '← 返回'),
-                  h('span', { style: { fontSize: 13, fontWeight: 600 } }, title),
+                }, section.title)),
+              ),
+              // 内容区：左边一条主题色，输入框和保存按钮也用主题色，别太单调。
+              h('div', { style: { borderLeft: `3px solid ${active.color}`, paddingLeft: 12, paddingTop: 2, paddingBottom: 2 } },
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 } },
+                  h('span', { style: { fontSize: 12, fontWeight: 600, color: active.color } }, active.title),
                   view === 'config' && config.editable === false
                     ? h('span', { style: { color: '#fbbf24', fontSize: 11 } }, '这个 profile 只能看不能改')
                     : null,
                 ),
-                ...fieldsFor(view),
+                ...fieldsFor(view, active.color),
                 h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 10 } },
-                  h('button', { onClick: () => saveSection(view), disabled: Boolean(busy), style: settingsButtonStyle },
-                    busy ? '保存中…' : '保存'),
+                  h('button', {
+                    onClick: () => saveSection(view),
+                    disabled: Boolean(busy),
+                    style: { ...settingsButtonStyle, borderColor: active.color + '99', color: active.color },
+                  }, busy ? '保存中…' : '保存'),
                   notice ? h('span', { style: { color: 'var(--dsw-alias-text-secondary, #9ca3af)' } }, notice) : null,
                 ),
               ),
+            ),
       );
     }
     return {
