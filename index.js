@@ -262,12 +262,23 @@ export function apply(ctx, config) {
 
   // --- Knock (掷骰敲门): missing / boredom ask to interact ---
 
-  /** Inject a knock message (with the riding summary) into all live agents. */
+  /**
+   * 只认她的会话（2026-11-24 用户需求）：状态条/敲门只发给她。
+   * `Agent.id` 就是 SessionId（@deepseek-ai/dsh-agent 的 Agent 接口），
+   * 所以和 targetSessionId 直接比即可；未配 targetSessionId 时保持旧行为
+   * （所有 live agent 都发）。
+   */
+  function isHerAgent(agent) {
+    return !config.targetSessionId || agent?.id === config.targetSessionId;
+  }
+
+  /** Inject a knock message (with the riding summary) into her agent only. */
   function knock(text, now) {
     const full = text + buildSummary(now);
     const agents = ctx.get('agents');
     if (agents) {
       for (const agent of agents.list()) {
+        if (!isHerAgent(agent)) continue;
         const sb = statusBars.get(agent.id);
         if (sb) sb.knock(full);
       }
@@ -357,6 +368,7 @@ export function apply(ctx, config) {
       const agents = ctx.get('agents');
       if (agents) {
         for (const agent of agents.list()) {
+          if (!isHerAgent(agent)) continue;
           try {
             const sb = statusBars.get(agent.id);
             if (sb) sb.inject(state);

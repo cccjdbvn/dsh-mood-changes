@@ -1,7 +1,7 @@
-# dsh-mood 0.2.15 已知问题与优化清单
+# dsh-mood 0.2.16 已知问题与优化清单
 
-> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜 · E6 回滚撞车：2026-11-24 凌晨 · E7 批量回滚+标记：2026-11-24 凌晨 · E8 无聊互斥补漏：2026-11-24 上午 · E9 面板变化列显示：2026-11-24 上午 · E10 注入消息缺 id 卡死归档：2026-11-24 下午 · E11 /tick 调试核算接口：2026-11-24 下午 · E12 主动核算工具：2026-11-24 下午
-> 对应版本：0.2.15（0.2.2 + E1–E12）
+> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜 · E6 回滚撞车：2026-11-24 凌晨 · E7 批量回滚+标记：2026-11-24 凌晨 · E8 无聊互斥补漏：2026-11-24 上午 · E9 面板变化列显示：2026-11-24 上午 · E10 注入消息缺 id 卡死归档：2026-11-24 下午 · E11 /tick 调试核算接口：2026-11-24 下午 · E12 主动核算工具：2026-11-24 下午 · E13 注入只发她的会话：2026-11-24 下午
+> 对应版本：0.2.16（0.2.2 + E1–E13）
 > 行号以审计时文件为准，后续编辑会漂移，以问题描述定位为准。
 
 ---
@@ -39,8 +39,9 @@
 | E10 | 状态条/敲门注入的 `user/message` 缺 `id`，host 存储校验失败 → 世界归档整份卡死 | ✅ 已修复（0.2.14：`_post()` 补 `id: randomUUID()`；历史两条缺 id 的旧会话仍卡着，改 host 会话文件属数据手术，未做） |
 | E11 | 核算 15 分钟一次，调试时干等、不知道 tick 有没有抛错 | ✅ 已实现（0.2.14：`GET /dsh-mood-changes/tick` 立刻核算一次，返回 `{ok, lastTickAt, values, queue}`；出错回 `{ok:false, error}`） |
 | E12 | 判句入账要等 tick（或强触发），模型没法主动结算；想撤一笔未结算的判句也找不到日志行 | ✅ 已实现（0.2.15：`mood_settle` 工具，模型主动启动、无冷却，只结算队列不衰减；空队列 `settled:0`） |
+| E13 | 状态条/敲门注入给所有 live agent，工作会话也收到她的情绪 | ✅ 已修复（0.2.16：只发给 `targetSessionId` 对应的 agent（`agent.id` 即 SessionId）；未配时保持全量旧行为） |
 
-修复验证：run.mjs 9 项 + rollback 7 项 + rollback-collision 8 项（E6 端到端，含传播行场景）+ features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 18 项（E4/E8 端到端）+ batch-rollback 20 项（E7 端到端）+ mark-rollback 25 项（E7b 端到端）+ change-text 28 项（E9 端到端，含路由响应）+ statusbar-id 13 项（E10：id/UUID/唯一性/source/容错）+ tick-route 13 项（E11：注册/成功/错误/不传 onTick 兼容/state 回归）+ settle 30 项（E12：入队→主动核算→落盘→空队列→核算后回滚→无冷却→兼容）+ 判官真机（judge-test.mjs）；14 个 JS 文件 `node --check` 通过（合计 247 项断言）。
+修复验证：run.mjs 9 项 + rollback 7 项 + rollback-collision 8 项（E6 端到端，含传播行场景）+ features 22 项 + index-flow 18 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 18 项（E4/E8 端到端）+ batch-rollback 20 项（E7 端到端）+ mark-rollback 25 项（E7b 端到端）+ change-text 28 项（E9 端到端，含路由响应）+ statusbar-id 13 项（E10：id/UUID/唯一性/source/容错）+ tick-route 13 项（E11：注册/成功/错误/不传 onTick 兼容/state 回归）+ settle 30 项（E12：入队→主动核算→落盘→空队列→核算后回滚→无冷却→兼容）+ inject-scope 9 项（E13：状态条/敲门只发她、未配时全量、id/source 不回退）+ 判官真机（judge-test.mjs）；14 个 JS 文件 `node --check` 通过（合计 256 项断言）。
 
 ---
 
@@ -215,6 +216,20 @@ GET /dsh-mood-changes/tick
 
 ---
 
+## 2026-11-24 下午：E13 状态条/敲门只发她的会话
+
+**症状**：15:32 那跳 tick 之后，工作会话（另一个 live agent）也收到了一条 `【情绪】乐（乐 53.2 / 悲 35.5）｜状态：焦虑`。注入代码遍历 `agents.list()` 全量发，设计前提「一个她」被多开的工作会话打破了。
+
+**修复**（0.2.16）：`@deepseek-ai/dsh-agent` 的 `Agent.id` 就是 `SessionId`，所以按 `config.targetSessionId` 过滤即可：
+
+- `index.js` 新增 `isHerAgent(agent)`：`!targetSessionId || agent.id === targetSessionId`。
+- **状态条注入**（tick 第 9 步）和 **敲门**（`knock()`）两个循环都加过滤；未配 `targetSessionId` 时保持旧行为（所有 live agent 都发）。
+- `statusBars` 仍按 agent 注册（配置热更时不用重建），只在发送时过滤。
+
+**回归**：新增 `_tmp/mood-smoke/inject-scope-test.mjs` 9 项——两个 mock agent（她 + 工作会话），状态条只发她、敲门只发她、工作会话零注入、注入仍带 id/source、tick 正常推进、未配 `targetSessionId` 时两个都发（旧行为保留）。
+
+---
+
 ## 已修复明细（供 review）
 
 - **A1** `log.js dateFor()`：改用本地 `getFullYear/getMonth/getDate`，禁用 `toISOString`。
@@ -242,6 +257,7 @@ GET /dsh-mood-changes/tick
 - **E10** `lib/statusbar.js _post()`：补 `id: randomUUID()`——注入的 `user/message` 缺 id 会过不了 host 存储校验，让世界归档整份拒绝打开、卡在那一行（2026-11-24 现场：seq 5048/5135 两条敲门消息）。
 - **E11** `lib/routes.js` 新增 `GET /dsh-mood-changes/tick`（可选 `onTick`，不传不注册）+ `index.js` 传入 `tick`：调试时立刻核算一次；返回 `{ok, lastTickAt, values, queue}`，出错回 `{ok:false, error}`。
 - **E12** `index.js settleQueueNow()` + `lib/tools.js mood_settle`：模型主动核算——只结算队列（delta + 传播 + 写日志 + 落盘），不衰减/不推进 tick/不跑思念无聊/不掷骰/不注入；无冷却，空队列 `settled:0`。`settleEntries()` 返回 logBatch 供工具回显。
+- **E13** `index.js isHerAgent()` + knock/状态条两个注入循环：状态条与敲门只发给 `targetSessionId` 对应的 agent（`Agent.id` 即 SessionId）；未配时全量旧行为。工作会话不再收到她的情绪。
 
 ## 功能缺口收账
 
