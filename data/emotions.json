@@ -234,7 +234,7 @@
                                      "cap":  17.5
                                  },
                      "jealous":  {
-                                     "label":  "酸",
+                                     "label":  "嫉妒",
                                      "weights":  {
                                                      "sad":  0.6,
                                                      "anger":  0.4
@@ -408,7 +408,7 @@
                                    "cap":  17.5
                                },
                      "sour":  {
-                                  "label":  "酸",
+                                  "label":  "吃醋",
                                   "weights":  {
                                                   "sad":  0.5,
                                                   "disgust":  0.5

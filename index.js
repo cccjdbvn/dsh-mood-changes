@@ -93,6 +93,10 @@ const JUDGE_SKIP_KINDS = new Set([
   'dsh-world-prompt-merge', // 世界提示词融合的模型输入
   'mood-lian', // 旧版情绪插件的快手号
   'plugin:dsh-mood-changes', // 我自己的状态条/敲门
+  'dsh-world-channel-context', // 同线回忆/图片补充：引用数据，不是新事件
+  'dsh-world-reply-nudge', // 催她回复的系统提示
+  'dsh-world-wechat-delivery', // 微信发送回执/被拒说明
+  'dsh-world-wechat-outgoing', // 微信出站回显
 ]);
 
 /**
@@ -119,11 +123,14 @@ export function judgeLineFor(kind, text, isOwner = false) {
   if (kind === 'dsh-world-life') return `【生活线】${capJudgeText(raw, 800)}`;
   if (kind === 'schedule') return `【定时任务】${capJudgeText(raw, 800)}`;
   if (kind === 'dsh-world-elsewhere') return `【世界】${capJudgeText(raw, 800)}`;
+  if (kind === 'dsh-world-outside') return `【世界】${capJudgeText(raw, 800)}`; // 门口/外面的动静（form:'ring'），是她经历的，但不是谁说的话
   return `用户：${capJudgeText(raw, 1200)}`;
 }
 
 /** QQ 桥消息 → 「用户：…」/「昵称：…」；未唤醒摘要保留成一段带标记的文本。 */
 function qqJudgeLine(raw, isOwner) {
+  // 出站被拒的系统回执（[QQ 出站被拒] …）不是谁说的话，不进判句。
+  if (/^\s*\[QQ\s*出站被拒\]/.test(raw)) return '';
   // 桥贴在每条入站下面的「回 QQ 怎么回」指令行，判官不需要。
   const body = raw
     .split(/\r?\n/)
@@ -293,6 +300,8 @@ export function apply(ctx, config) {
     // 时刻（0 = 没开窗），turnCount = A 之后已数到第几个「调过工具的轮」。
     if (state.boredom.countStartAt === undefined) state.boredom.countStartAt = 0;
     if (state.boredom.turnCount === undefined) state.boredom.turnCount = 0;
+    // E33：最近一次 A（或 B）的时刻，A 的 1h CD 从这里算（0 = 没有 CD）
+    if (state.boredom.lastAAt === undefined) state.boredom.lastAAt = 0;
     // 回滚标记队列的回填（2026-11-24 起，E7b）
     if (!Array.isArray(state.pendingRollback)) state.pendingRollback = [];
     resetSummary(Date.now());
@@ -782,7 +791,7 @@ export function apply(ctx, config) {
       ts: s.ts,
       kind: 'send',
       text: s.text,
-      line: `她（QQ 发出）：${s.text}`
+      line: `她：${s.text}`
     })));
     const roundLines = buildRoundLines(events, reply);
     const userTexts = events.filter(e => e.kind === 'user' && e.line).map(e => e.line);
@@ -881,7 +890,7 @@ export function apply(ctx, config) {
       // emotion is directed at the user; otherwise zero it and renormalize.
       const closeOnly = await emotions.closeOnlyFor(key);
       const rawWeights = await emotions.weightsFor(key);
-      const weights = Emotions.adjustCloseOnly(rawWeights, closeOnly, about === 'her');
+      const weights = Emotions.adjustCloseOnly(rawWeights, closeOnly, about === 'user');
 
       const cap = await emotions.capFor(key);
       const score = herEmotion.intensity * cap;
