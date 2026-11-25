@@ -39,7 +39,7 @@ function textOf(message) {
 }
 
 /** Timer APIs (ctx.interval) require the timer service as a declared dependency. */
-export const inject = ['timer', 'webServer'];
+export const inject = ['timer', 'webServer', 'systemPrompt'];
 
 /**
  * 谁是主人（E24，2026-11-24 用户明确）：
@@ -74,15 +74,37 @@ function capJudgeText(s, max = 2000) {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
+/** 客户端/宿主自己注入的脚手架：不是她经历的事，不进判句（2026-11-25 扫描后定）。 */
+const JUDGE_SKIP_KINDS = new Set([
+  'runtime-context', // 会话环境快照（每回合）
+  'time-context', // 时间戳（每回合）
+  'agent-instructions', // 工作区指令 / AGENTS.md
+  'skill-catalog', // 技能清单
+  'tool-jobs', // 后台任务完成通知
+  'subagent-settled', // 子代理结束通知
+  'agent-message', // 代理之间传话
+  'user-approval', // 审批策略变更
+  'model-selection', // 换模型提示
+  'repeat-tool-reminder', // 重复调用提醒
+  'compact-checkpoint', // 压缩摘要
+  'dsh-world-history', // 最近 200 轮聊天记录（上下文，不是新事件）
+  'dsh-world-mood', // 旧版心情值快照
+  'dsh-world-summary-input', // 世界摘要的模型输入
+  'dsh-world-prompt-merge', // 世界提示词融合的模型输入
+  'mood-lian', // 旧版情绪插件的快手号
+  'plugin:dsh-mood-changes', // 我自己的状态条/敲门
+]);
+
 /**
  * 判句行（E27，2026-11-25 用户要求）：每条入站消息定一个「谁在说」的行，
  * 按时间顺序拼给判官（#4）。来源区分（#3）在这里落地：
  *
- * - QQ 桥（`plugin:dsh-qq-bridge`）：拆掉 `[QQ · 私聊]` 前缀和「（回 QQ 用…）」
- *   指令行；**昵称在 ownerNames 里（且私聊）→ `用户：内容`**，别人 → `昵称：内容`
- *   （群里也一样，群名不带进去）。#5/#6
+ * - QQ 桥（`plugin:dsh-qq-bridge`，含旧版 `plugin` + `[QQ` 开头）：拆掉
+ *   `[QQ · 私聊]` 前缀和「（回 QQ 用…）」指令行；**昵称在 ownerNames 里（且私聊）
+ *   → `用户：内容`**，别人 → `昵称：内容`（群里也一样，群名不带进去）。#5/#6
  * - 世界生活线（`dsh-world-life`）→ `【生活线】…`：定时提醒，不是用户说的。
- * - `runtime-context` / `time-context`：harness 脚手架，不进判句。
+ * - 定时任务（`schedule`）→ `【定时任务】…`；世界在外的通知 → `【世界】…`。
+ * - 客户端/宿主脚手架（见 `JUDGE_SKIP_KINDS`）不进判句。
  * - 其它（桌面端输入、rpc、空 kind…）→ `用户：内容`。
  * @param {string} kind - message.source.kind
  * @param {string} text - 消息正文
@@ -92,10 +114,11 @@ function capJudgeText(s, max = 2000) {
 export function judgeLineFor(kind, text, isOwner = false) {
   const raw = typeof text === 'string' ? text.trim() : '';
   if (!raw) return '';
-  if (kind === QQ_BRIDGE_KIND) return qqJudgeLine(raw, isOwner);
+  if (JUDGE_SKIP_KINDS.has(kind)) return '';
+  if (kind === QQ_BRIDGE_KIND || (kind === 'plugin' && raw.startsWith('[QQ'))) return qqJudgeLine(raw, isOwner);
   if (kind === 'dsh-world-life') return `【生活线】${capJudgeText(raw, 800)}`;
-  if (kind === 'runtime-context' || kind === 'time-context') return '';
-  if (kind === 'plugin:dsh-mood-changes') return '';
+  if (kind === 'schedule') return `【定时任务】${capJudgeText(raw, 800)}`;
+  if (kind === 'dsh-world-elsewhere') return `【世界】${capJudgeText(raw, 800)}`;
   return `用户：${capJudgeText(raw, 1200)}`;
 }
 
@@ -170,6 +193,25 @@ export function apply(ctx, config) {
   const judgeLog = new JudgeLog(worldDir);
   const ownerNames = config.ownerNames || [];
 
+  // 六情上下文（E28，2026-11-25 用户要求）：六情的提示不再作为一条 user 消息
+  // 塞进会话（那会显示成「收到执行请求」），改成注册一段运行时上下文——只在
+  // 每步装配时进 prompt，不触发回合、不占聊天记录。
+  // 护栏：任一情绪 > 40 才有内容；距上次刷新满 1.5 小时才换新内容。
+  let moodContextText = '';
+  let offMoodContext = null;
+  try {
+    const promptService = ctx.systemPrompt ?? ctx.get('systemPrompt');
+    if (promptService && typeof promptService.context === 'function') {
+      offMoodContext = promptService.context({
+        name: 'dsh-mood-changes/status',
+        order: 900,
+        text: () => moodContextText
+      });
+    }
+  } catch (e) {
+    ctx.logger?.warn?.('[dsh-mood-changes] context registration error:', e);
+  }
+
   // Mutable state (loaded from disk on start)
   let state = null;
 
@@ -239,6 +281,8 @@ export function apply(ctx, config) {
     if (!state.boredom.lastNotifyAt) state.boredom.lastNotifyAt = 0;
     if (!state.boredom.lastRoll) state.boredom.lastRoll = 0;
     if (state.boredom.lastRollHit === undefined) state.boredom.lastRollHit = false;
+    // 六情上下文上次刷新时间（E28 起；0 = 从没刷新过）
+    if (state.lastStatusAt === undefined) state.lastStatusAt = 0;
     // 工具侧窗口计数的回填（2026-11-23 起有）
     if (state.boredom.toolWindowStart === undefined) state.boredom.toolWindowStart = 0;
     if (state.boredom.toolWindowCount === undefined) state.boredom.toolWindowCount = 0;
@@ -393,7 +437,11 @@ export function apply(ctx, config) {
 
   // --- Knock (掷骰敲门): missing / boredom ask to interact ---
 
-  /** Inject a knock message (with the riding summary) into her agent only. */
+  /**
+   * 敲一次门（带搭车摘要），只发给她那个 agent。
+   * E29（2026-11-25）：返回实际交付数——交付成功才让调用方记 `lastNotifyAt`，
+   * 否则这次「掷中」会被白白吃掉（12:55 那次就是插进 inbox 没人醒）。
+   */
   function knock(text, now) {
     const full = text + buildSummary(now);
     const agents = ctx.get('agents');
@@ -403,13 +451,14 @@ export function apply(ctx, config) {
       for (const agent of agents.list()) {
         if (!isHerAgent(agent, target)) continue;
         const sb = statusBars.get(agent.id);
-        if (sb) { sb.knock(full); delivered++; }
+        if (sb && sb.knock(full)) delivered++;
       }
     }
     if (delivered > 0) {
       resetSummary(now);
       state.lastInjectAt = now; // a knock also opens a new summary segment
     }
+    return delivered;
   }
 
   function tryKnock(now) {
@@ -418,17 +467,17 @@ export function apply(ctx, config) {
 
     const m = state.missing;
     if (!(m.lastNotifyAt && now - m.lastNotifyAt < 60 * 60000) && Missing.shouldKnock(m, now, tuning)) {
-      m.lastNotifyAt = now;
       const v = (m.value || 0).toFixed(1);
-      knock(m.value >= 80
+      const delivered = knock(m.value >= 80
         ? `思念 ${v}，好些时候没和主人说话了。`
         : `思念 ${v}，要不要和主人说句话？`, now);
+      if (delivered > 0) m.lastNotifyAt = now;
     }
 
     const b = state.boredom;
     if (!(b.lastNotifyAt && now - b.lastNotifyAt < 60 * 60000) && Boredom.shouldKnock(b, now, tuning)) {
-      b.lastNotifyAt = now;
-      knock(`无聊 ${(b.value || 0).toFixed(1)}，要不要自己做点什么？`, now);
+      const delivered = knock(`无聊 ${(b.value || 0).toFixed(1)}，要不要自己做点什么？`, now);
+      if (delivered > 0) b.lastNotifyAt = now;
     }
   }
 
@@ -487,30 +536,18 @@ export function apply(ctx, config) {
     // 8. Knock dice (missing / boredom)
     tryKnock(now);
 
-    // 9. Maybe inject status bar
-    // 2026-11-25（E27）：只在她「在场」时塞状态条——30 分钟内有过消息才算。
-    // 她不在场时（夜里、长时间没人说话）注入的消息会堆在 inbox 里，等下一次
-    // 醒来被一次性 splice 进来：3 条「收到执行请求」、每条还是生成那一刻的
-    // 旧数值（08:50 / 48.9、45.4、42.4 就是这么来的）。
-    const STATUS_ACTIVE_WINDOW_MS = 30 * 60000;
-    const sheIsHere = lastActivityAt > 0 && (now - lastActivityAt) <= STATUS_ACTIVE_WINDOW_MS;
-    if (sheIsHere && StatusBar.shouldInject(state, now)) {
-      const agents = ctx.get('agents');
-      const target = targetSessionId();
-      let delivered = 0;
-      if (agents) {
-        for (const agent of agents.list()) {
-          if (!isHerAgent(agent, target)) continue;
-          try {
-            const sb = statusBars.get(agent.id);
-            if (sb) { sb.inject(state); delivered++; }
-          } catch (e) { /* agent may not be ready */ }
-        }
-      }
-      if (delivered > 0) {
-        state.lastInjectAt = now;
-        resetSummary(now); // a status-bar injection opens a new summary segment
-      }
+    // 9. 六情上下文（E28，2026-11-25 用户要求）
+    // 不再是「往会话里塞一条状态条消息」——那会显示成「收到执行请求」，还会
+    // 在她不在场时排队。现在只更新 `systemPrompt.context` 的文本：
+    //   · 任一条 > 40 才有内容；全部 ≤ 40 就把内容清空（别让旧数值一直挂着）
+    //   · 距上次刷新满 1.5 小时才换新内容；没到点就保持原样（装配时不会重发）
+    if (StatusBar.shouldRefresh(state, now)) {
+      moodContextText = StatusBar.buildStatusText(state);
+      state.lastStatusAt = now;
+      stateDirty = true;
+      await store.saveState(state);
+    } else if (moodContextText && Math.max(...Object.values(state.values)) <= 40) {
+      moodContextText = '';
     }
   }
 
@@ -1083,6 +1120,7 @@ export function apply(ctx, config) {
     tickInterval();
     for (const d of toolDisposers) d();
     for (const d of routeDisposers) { try { d(); } catch {} }
+    if (typeof offMoodContext === 'function') { try { offMoodContext(); } catch {} }
     for (const off of [offSessionEvent, offSessionDisposed, offAgentCreated, offAgentDisposed, offToolsResult]) {
       if (typeof off === 'function') { try { off(); } catch {} }
     }

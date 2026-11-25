@@ -1,7 +1,7 @@
-# dsh-mood 1.0.2 已知问题与优化清单
+# dsh-mood 1.0.3 已知问题与优化清单
 
-> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜 · E6 回滚撞车：2026-11-24 凌晨 · E7 批量回滚+标记：2026-11-24 凌晨 · E8 无聊互斥补漏：2026-11-24 上午 · E9 面板变化列显示：2026-11-24 上午 · E10 注入消息缺 id 卡死归档：2026-11-24 下午 · E11 /tick 调试核算接口：2026-11-24 下午 · E12 主动核算工具：2026-11-24 下午 · E13 注入只发她的会话：2026-11-24 下午 · E14 按工作目录自动认家：2026-11-24 下午 · E15 shy 标签改「害羞」：2026-11-24 下午 · E16 shy 亲近权重 乐 0.6/惧 0.4：2026-11-24 下午 · E17 面板日志按时间降序：2026-11-24 下午 · E18 面板显示上次掷骰：2026-11-24 晚 · E19 设置页（插件配置/运行参数/情绪基线）：2026-11-24 晚 · E20 设置页兜底注册独立 section：2026-11-24 晚 · E21 设置页改卡片墙：2026-11-24 晚 · E22 横向页签+配色+六情半衰期：2026-11-24 晚 · E23 衰减分章（六情 / 思念与无聊）：2026-11-24 晚 · E24 主人判定（桌面默认主人 / QQ 认主人）：2026-11-24 晚 · E25 QQ 桥的消息读给判官：2026-11-25 凌晨 · E26 判官判定记录 + 入账门槛 0.10：2026-11-25 上午 · E27 判句输入按来源改写 + 时间排序 + 状态条只在她在场时注入：2026-11-25 上午
-> 对应版本：1.0.2（0.2.x 系列 + E1–E27；版本号 1.0.1 → 1.0.2）
+> 审计日期：2026-11-22 · 修复：2026-11-23 凌晨（A/B/C 项）· 判官直判她重构：2026-11-23 晚 · E1 传播回声修复：2026-11-23 深夜 · E2 状态回滚 / E3 级联：2026-11-23 深夜 · E4 无聊工具窗口：2026-11-23 夜 · E5 胶囊槽位：2026-11-23 夜 · E6 回滚撞车：2026-11-24 凌晨 · E7 批量回滚+标记：2026-11-24 凌晨 · E8 无聊互斥补漏：2026-11-24 上午 · E9 面板变化列显示：2026-11-24 上午 · E10 注入消息缺 id 卡死归档：2026-11-24 下午 · E11 /tick 调试核算接口：2026-11-24 下午 · E12 主动核算工具：2026-11-24 下午 · E13 注入只发她的会话：2026-11-24 下午 · E14 按工作目录自动认家：2026-11-24 下午 · E15 shy 标签改「害羞」：2026-11-24 下午 · E16 shy 亲近权重 乐 0.6/惧 0.4：2026-11-24 下午 · E17 面板日志按时间降序：2026-11-24 下午 · E18 面板显示上次掷骰：2026-11-24 晚 · E19 设置页（插件配置/运行参数/情绪基线）：2026-11-24 晚 · E20 设置页兜底注册独立 section：2026-11-24 晚 · E21 设置页改卡片墙：2026-11-24 晚 · E22 横向页签+配色+六情半衰期：2026-11-24 晚 · E23 衰减分章（六情 / 思念与无聊）：2026-11-24 晚 · E24 主人判定（桌面默认主人 / QQ 认主人）：2026-11-24 晚 · E25 QQ 桥的消息读给判官：2026-11-25 凌晨 · E26 判官判定记录 + 入账门槛 0.10：2026-11-25 上午 · E27 判句输入按来源改写 + 时间排序 + 状态条只在她在场时注入：2026-11-25 上午 · E28 六情改运行时上下文（>40 且 1.5h 才刷新）：2026-11-25 中午 · E29 敲门改 followup（不再躺在 inbox）：2026-11-25 13:10
+> 对应版本：1.0.3（0.2.x 系列 + E1–E29；版本号 1.0.2 → 1.0.3）
 > 行号以审计时文件为准，后续编辑会漂移，以问题描述定位为准。
 
 ---
@@ -54,8 +54,10 @@
 | E25 | QQ 那边说的话判官看不到：`qq_bridge_send` 是工具调用，不进 `assistant/message`；`plugin:dsh-qq-bridge` 注进来的消息也没被读进判句 | ✅ 已实现（1.0.1：**只读，不拦截**——`tools/result` 里读 `qq_bridge_send` 的 `text` 参数，`turn/end` 时拼成「她（QQ 发出）：…」喂判官；QQ 桥注入的正文原样读进判句；只在工具里说话的一轮也算她说了。内容一字不改，只有 2000 字长度上限防炸上下文） |
 | E26 | 判了「没变化 / 没过门槛 / 调用失败」时一个字都不留，事后只能翻 vLLM 日志猜 | ✅ 已实现（1.0.2：`lib/judge-log.js` —— 判官每次调用落一行 JSON 到 `worldDir/mood/judge-log/YYYY-MM-DD.jsonl`，含 round / clear / confidence / emotions / applied / states / skipped / verdict；写失败只 warn。同时按用户要求把**入账门槛 0.15 → 0.10**，`judge.js` 的过滤、词表兜底、`data/judge-prompt.md` 提示词、`lexicon.json` 注释一起改） |
 | E27 | 判句输入不区分来源、不分先后：生活线提醒、QQ 消息、harness 脚手架混在「用户：」里；QQ 的 `[QQ · 私聊]` 与「（回 QQ 用…）」也照抄；状态条夜里排队，早上一起冒出来 | ✅ 已实现（1.0.2：`judgeLineFor(kind,text,isOwner)` 按来源改写——QQ 拆前缀/指令行、主人 →「用户：」别人 →「昵称：」；生活线 →「【生活线】」；`runtime-context`/`time-context` 不进判句；`buildRoundLines(events, reply)` 把这一轮所有入站按时间排序、回复放最后；状态条只在**她 30 分钟内有过消息**时才注入，否则整夜不排队） |
+| E28 | 六情提示作为 user 消息注入，会在聊天里显示成「收到执行请求」，还可能排队；要求改成上下文注入，并加护栏 | ✅ 已实现（1.0.3：六情改为 `systemPrompt.context` 的**运行时上下文**（不触发回合、不占聊天记录）；护栏 = 任一条 > 40 才有内容、距上次刷新满 **1.5 小时**才换新内容，全部 ≤ 40 清空；`state.lastStatusAt` 记刷新时间；无聊/思念敲门**照旧**走消息） |
+| E29 | 12:55 无聊掷中后敲门没出现：消息被塞进 next-step 上下文就不会醒，她一整天没有回合，敲门永远不露面 | ✅ 已修复（1.0.3：`StatusBar.knock()` 改走 `agent.followup()`（排队下一轮 + 叫醒），没有 followup 才退回 inject；交付成功才记 `lastNotifyAt`，掷中的机会不再被白白吃掉） |
 
-修复验证：run.mjs 9 项 + rollback 7 项 + rollback-collision 8 项（E6 端到端，含传播行场景）+ features 22 项 + index-flow 19 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项、E25 纯工具轮 1 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 18 项（E4/E8 端到端）+ batch-rollback 20 项（E7 端到端）+ mark-rollback 25 项（E7b 端到端）+ change-text 28 项（E9 端到端，含路由响应）+ statusbar-id 13 项（E10：id/UUID/唯一性/source/容错）+ tick-route 13 项（E11：注册/成功/错误/不传 onTick 兼容/state 回归）+ settle 30 项（E12：入队→主动核算→落盘→空队列→核算后回滚→无冷却→兼容）+ inject-scope 9 项（E13：状态条/敲门只发她、未配时全量、id/source 不回退）+ workspace-home 12 项（E14：选对家/排除归档与工作目录/subagent/fork/换会话跟上/没有家不投）+ log-order 13 项（E17：/log 按记录时间降序、同分钟保持文件序、块筛选仍降序、日志 .md 排序不动、无记录日期空数组）+ roll-status 37 项（E18：掷骰记 lastRollHit、/state 透出、旧 state 兜底、夜晚停掷边界）+ tuning 57 项（E19：运行参数归一化/单位换算/夜间窗口/参数化行为/落盘；/tuning 与 /baseline 的 GET/POST、白名单、400、403；E22 加六情半衰期 7 项）+ owner 13 项（E24：桌面端各种 kind、QQ 私聊/群聊/legacy kind/未唤醒摘要）+ qq-judge-input 22 项（E27：QQ 前缀/指令行清洗、主人→用户、别人→昵称、群聊、生活线、脚手架不进判句、时间序、去重、纯工具轮）+ 判官真机（judge-test.mjs）；16 个 JS 文件 `node --check` 通过（合计 411 项断言）。
+修复验证：run.mjs 9 项 + rollback 7 项 + rollback-collision 8 项（E6 端到端，含传播行场景）+ features 22 项 + index-flow 19 项（判官走词表降级，无 vLLM 也能跑；含 E1 回归 2 项、E25 纯工具轮 1 项）+ baseline-watch 6 项 + state-rollback 15 项（E2 端到端）+ state-cascade 15 项（E3 端到端）+ boredom-window 18 项（E4/E8 端到端）+ batch-rollback 20 项（E7 端到端）+ mark-rollback 25 项（E7b 端到端）+ change-text 28 项（E9 端到端，含路由响应）+ statusbar-id 13 项（E10：id/UUID/唯一性/source/容错）+ tick-route 13 项（E11：注册/成功/错误/不传 onTick 兼容/state 回归）+ settle 30 项（E12：入队→主动核算→落盘→空队列→核算后回滚→无冷却→兼容）+ inject-scope 9 项（E13：状态条/敲门只发她、未配时全量、id/source 不回退）+ workspace-home 12 项（E14：选对家/排除归档与工作目录/subagent/fork/换会话跟上/没有家不投）+ log-order 13 项（E17：/log 按记录时间降序、同分钟保持文件序、块筛选仍降序、日志 .md 排序不动、无记录日期空数组）+ roll-status 37 项（E18：掷骰记 lastRollHit、/state 透出、旧 state 兜底、夜晚停掷边界）+ tuning 57 项（E19：运行参数归一化/单位换算/夜间窗口/参数化行为/落盘；/tuning 与 /baseline 的 GET/POST、白名单、400、403；E22 加六情半衰期 7 项）+ owner 13 项（E24：桌面端各种 kind、QQ 私聊/群聊/legacy kind/未唤醒摘要）+ qq-judge-input 29 项（E27：QQ 前缀/指令行清洗、主人→用户、别人→昵称、群聊、生活线、脚手架不进判句、时间序、去重、纯工具轮）+ statusbar-id 20 项（E28/E29：敲门优先 followup、id/source、六情不再发消息、>40 与 1.5h 护栏）+ 判官真机（judge-test.mjs）；16 个 JS 文件 `node --check` 通过（合计 425 项断言）。
 
 E15 为纯文案：`data/emotions.json` JSON 解析通过、41 条细名查重通过（无新增重名），未新增断言。
 E16 是权重表改动（数据），判句/传播/衰减逻辑未动；`features-test.mjs` 22 项仍全绿（含 closeOnly 两个分支）。
@@ -407,6 +409,44 @@ GET /dsh-mood-changes/tick
 - `onUserMessage` 调 `ownerFromSource(kind, text, ownerNames)`（显式传昵称表）。
 
 **回归**：新增 `_tmp/mood-smoke/owner-test.mjs` 13 项——桌面端 user/空/undefined/其它 kind 都是主人；QQ 私聊主人在名单→主人、别人→否、名单空→否、昵称带空格→认；QQ 群聊→否；legacy `plugin` 同样规则；非 QQ 插件消息与 QQ 未唤醒摘要→否。全量 **21 个脚本 388 项断言全绿**。
+
+---
+
+## 2026-11-25 13:10：E29 敲门改 followup（用户问「掷中后敲门动作去了哪」）
+
+**现场**：12:55:14 的 tick 无聊掷中（boredom 53.2，>50 掷骰），session 里只留下一条
+
+```json
+{"type":"agent/inbox/spliced","seq":3967,"data":{"target":"next-step","inserted":[{"content":[{"type":"text","text":"无聊 53.2，要不要自己做点什么？"}],"source":{"kind":"plugin:dsh-mood-changes"}}]}}
+```
+
+之后没有 `turn/start`——她上一轮 12:07 结束、`plan_next` 定到 18:05，中间不会醒。
+
+**根因**：敲门走的是 `agent.inject()`。按 DSH 契约，`inject()` 是「把消息放进 next-step 上下文、**不叫醒**驱动」；她不在回合里，敲门就永远停在 inbox，不会出现在聊天里，也不会有回合。今早三条状态条堆积也是同一个机制（状态条已在 E28 改成 `systemPrompt.context`）。
+
+**改法**：
+
+- `lib/statusbar.js`：`knock()` 改走 `agent.followup()`（排队下一轮 prompt + 叫醒驱动）；没有 `followup` 的宿主才退回 `inject`；返回是否交出成功。
+- `index.js knock()`：返回交付数；`tryKnock` 只在 `delivered > 0` 时记 `lastNotifyAt`——交付不成功不消耗这次机会。
+- 六情状态条不受影响（E28 起走上下文）。
+
+**回归**：`statusbar-id` 16 → 20 项（加了「有 followup 时走 followup、不再 inject、返回值、无通道返回 false」4 项）；全量 22 个脚本 **425 项断言全绿**。
+
+---
+
+## 2026-11-25 中午：E28 六情改运行时上下文（用户需求）
+
+**需求**：六情的提示改成**上下文注入**（不再是触发执行请求的那种消息）；加护栏：没有 >40 的情绪不注入，有 >40 且上次注入超过 **1.5 小时**才注入。无聊/思念照旧。
+
+**改法**：
+
+- `index.js` 注册 `ctx.systemPrompt.context({ name: 'dsh-mood-changes/status', order: 900, text: () => moodContextText })`——模型每步装配时以 `<system-reminder>` 运行时上下文看到它；**不产生会话消息、不触发回合**（E28 之前是 `agent.inject` 一条 user 消息，UI 上显示成「收到执行请求」，不在场时还会排队）。
+- `lib/statusbar.js` 去掉 `inject()` 与 `shouldInject()`，加 `shouldRefresh(state, now, intervalMs=90min)`：任一条 > 40 且距 `state.lastStatusAt` 满 1.5 小时才返回 true。
+- `tick` 第 9 步：够条件才把文本换成 `buildStatusText(state)` 并记 `lastStatusAt`、落盘；全部 ≤ 40 时把文本清空（旧数值不挂着）。
+- 敲门（无聊/思念）仍走 `knock()` → `agent.inject` 消息，原样不动。
+- `inject` 依赖加 `systemPrompt`。
+
+**回归**：`statusbar-id` 13 → 16 项（敲门 id/source、状态条文字仍可用、>40 与 1.5h 护栏 5 项）；`inject-scope` 9 项改为用敲门验证范围（场景 2 断言六情不再发消息）；`workspace-home` 12 项同样改用敲门；全量 22 个脚本 **421 项断言全绿**。
 
 ---
 
