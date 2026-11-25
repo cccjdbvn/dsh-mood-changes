@@ -246,6 +246,12 @@ export function apply(ctx, config) {
   const pendingReplies = new Map(); // sessionId -> string
   const qqSends = new Map(); // sessionId -> string[]（这一轮 qq_bridge_send 发出的文本）
 
+  // 无聊的轮次计数（E30，2026-11-25 用户拍板）：计数单位从「工具调用次数」
+  // 改成「调过工具的对话轮」。A 那轮记第 0 轮；这两个标记记的是「本轮状态」，
+  // 在 turn/end 消费后清掉（会话销毁时也清）。
+  const turnHasWork = new Map(); // sessionId -> 本轮是否调用过 qq_bridge_send 以外的工具
+  const aTurn = new Map(); // sessionId -> 本轮是否有 A（无聊衰减）落地（A 那轮 = 第 0 轮，不计数）
+
   // Summary bookkeeping ("搭车"): reset on every injection (status bar or
   // knock), rendered only when a knock fires.
   let summary = null;
@@ -283,9 +289,10 @@ export function apply(ctx, config) {
     if (state.boredom.lastRollHit === undefined) state.boredom.lastRollHit = false;
     // 六情上下文上次刷新时间（E28 起；0 = 从没刷新过）
     if (state.lastStatusAt === undefined) state.lastStatusAt = 0;
-    // 工具侧窗口计数的回填（2026-11-23 起有）
-    if (state.boredom.toolWindowStart === undefined) state.boredom.toolWindowStart = 0;
-    if (state.boredom.toolWindowCount === undefined) state.boredom.toolWindowCount = 0;
+    // 无聊轮次计数的回填（E30，2026-11-25 起）：countStartAt = 最近一次 A 的
+    // 时刻（0 = 没开窗），turnCount = A 之后已数到第几个「调过工具的轮」。
+    if (state.boredom.countStartAt === undefined) state.boredom.countStartAt = 0;
+    if (state.boredom.turnCount === undefined) state.boredom.turnCount = 0;
     // 回滚标记队列的回填（2026-11-24 起，E7b）
     if (!Array.isArray(state.pendingRollback)) state.pendingRollback = [];
     resetSummary(Date.now());
@@ -352,13 +359,10 @@ export function apply(ctx, config) {
    */
   function settleEntries(entries, now) {
     if (!entries || entries.length === 0) return [];
-    const mods = States.compositeMod(state.states);
     const logBatch = [];
 
     for (const entry of entries) {
       const deltas = entry.deltas || [];
-      let primaryBase = null;
-      let primaryActual = 0;
       for (const d of deltas) {
         const before = state.values[d.base] ?? 0;
         MoodPool.apply(state.values, d.base, d.delta, d.cap);
@@ -381,30 +385,6 @@ export function apply(ctx, config) {
             label: entry.label || '',
             delta: actual,
             reason: (entry.reason || '').slice(0, 10)
-          });
-        }
-        // E1: track the dominant base of this entry (largest landed delta).
-        if (Math.abs(actual) > Math.abs(primaryActual)) {
-          primaryBase = d.base;
-          primaryActual = actual;
-        }
-      }
-      // E1 fix (2026-11-23): SPEC 5.6 says 「主情绪的分量传给相关情绪」—
-      // only the dominant base propagates, using the delta that actually
-      // landed. Previously EVERY delta propagated, so a secondary base
-      // (e.g. anger 2.8 of hurt, vs sad 11.2) spread to others AND back
-      // into the primary via the reciprocal matrix entries — the log
-      // showed 「由 怒 传播」 rows feeding 悲, a mutual echo (左脚踩右脚).
-      if (primaryBase && Math.abs(primaryActual) >= 0.01) {
-        const propagated = Coupling.propagate(state.values, primaryBase, primaryActual, mods);
-        for (const p of propagated) {
-          logBatch.push({
-            ts: now, effectiveAt: now,
-            block: MoodLog.blockForBase(p.base),
-            emotion: '传播',
-            delta: p.delta,
-            reason: `由 ${MoodLog.blockForBase(p.parent)} 传播`,
-            stateNote: '—'
           });
         }
       }
@@ -481,6 +461,46 @@ export function apply(ctx, config) {
     }
   }
 
+  // --- Boredom 轮次结算（E30，2026-11-25 用户拍板） ---
+  //
+  // A = 任何一次非计数触发的无聊衰减（消息 ×0.7 / 工具 ×0.6）真正落地；A 一
+  // 落地就开窗（A 那轮记第 0 轮）。计数单位改成「调过工具的对话轮」——同一轮
+  // 里调 48 次工具也只算这一轮。A 后一个窗口（默认 1 小时）内数到第 5 轮 →
+  // 触发一次 B（×0.6）；B 之后关窗等下一次 A；数到第 5 轮时已超窗口则这次 B
+  // 作废（旧实现按调用次数数，16 分钟能连发 6 笔 B —— 见今天的账）。
+  function settleBoredomTurn(sessionId, now) {
+    if (!state) return;
+    const hadWork = turnHasWork.get(sessionId) === true;
+    const isATurn = aTurn.get(sessionId) === true;
+    turnHasWork.delete(sessionId);
+    aTurn.delete(sessionId);
+
+    // A 那一轮是第 0 轮：不 +1。没干过活（只调了 qq_bridge_send 或没调工具）的轮也不 +1。
+    const r = Boredom.onTurnEnd(state.boredom, now, hadWork && !isATurn, tuning);
+    if (r.expired) {
+      stateDirty = true;
+      saveStateIfDirty(now).catch(() => {});
+      return;
+    }
+    if (r.b > 0) {
+      const secondAt = tuning?.boredom?.toolSecondAt ?? 5;
+      fireAndForget(log.append({
+        ts: now, block: '无聊', emotion: '无聊',
+        delta: -Math.round(r.b * 10) / 10,
+        reason: `A 后第 ${secondAt} 轮 ×0.6`
+      }));
+      // B 是真落账，立即落盘（同 A 的口径）。
+      stateDirty = false;
+      lastStateSaveAt = now;
+      fireAndForget(store.saveState(state));
+      return;
+    }
+    if (r.turnCount > 0) {
+      stateDirty = true;
+      saveStateIfDirty(now).catch(() => {});
+    }
+  }
+
   // --- Tick ---
   async function tick(now) {
     if (!state) return;
@@ -498,10 +518,25 @@ export function apply(ctx, config) {
     const skipBases = States.consumeSkipDecay(state.states, now);
     state.values = MoodPool.decay(state.values, baselineRef.current, dtMs, skipBases, tuning);
 
-    // 2. Settle the event queue (apply + propagate)
+    // 2. Settle the event queue（只入账，不再逐笔传播；E31）
     settleEntries(store.drainQueue(state), now);
 
-    // 3. Coupling: tick damping
+    // 2.5 水位传播（E31，2026-11-25 用户拍板）：只有「自动核算（tick）」这一步
+    // 传播一次，依据**结算后的总值**——源 >60 的溢出 × 矩阵系数，目标正向封顶
+    // 30 且原本 ≥30 不加。强触发的立即结算与她主动的 mood_settle 都不传播。
+    const propagated = Coupling.propagateFromValues(state.values, States.compositeMod(state.states));
+    if (propagated.length > 0) {
+      fireAndForget(log.appendBatch(propagated.map((p) => ({
+        ts: now, effectiveAt: now,
+        block: MoodLog.blockForBase(p.base),
+        emotion: '传播',
+        delta: p.delta,
+        reason: `由 ${MoodLog.blockForBase(p.parent)} 传播`,
+        stateNote: '—'
+      }))));
+    }
+
+    // 3. Coupling: tick damping（另一条机制，系数 0，未启用）
     Coupling.dampen(state.values, 0); // Start at 0, increase after a week
 
     // 4. Missing & Boredom tick
@@ -678,9 +713,12 @@ export function apply(ctx, config) {
 
     const logBatch = [];
 
-    // Boredom drop: any message → ×0.7
+    // Boredom drop: any message → ×0.7。E30：这次衰减就是 A，落地即开轮次
+    // 窗口（本条消息所在的这一轮 = 第 0 轮）。
     const boredomDrop = Boredom.drop(state.boredom, now, 'msg', tuning);
     if (boredomDrop > 0) {
+      Boredom.startCountWindow(state.boredom, now);
+      aTurn.set(sessionId, true);
       logBatch.push({
         ts: now, block: '无聊', emotion: '无聊',
         delta: -Math.round(boredomDrop * 10) / 10,
@@ -977,6 +1015,8 @@ export function apply(ctx, config) {
       }
 
       if (event.type === 'turn/end') {
+        // 先算无聊的轮次账（B 只可能在这一步触发），再进异步判句。
+        settleBoredomTurn(sessionId, now);
         fireAndForget(onTurnEnd(sessionId, now));
         return;
       }
@@ -990,6 +1030,8 @@ export function apply(ctx, config) {
     turnUserTexts.delete(session?.id);
     pendingReplies.delete(session?.id);
     qqSends.delete(session?.id);
+    turnHasWork.delete(session?.id);
+    aTurn.delete(session?.id);
   });
 
   // --- Agent lifecycle (status bars only; judging lives on session/event) ---
@@ -1080,26 +1122,21 @@ export function apply(ctx, config) {
       if (list.length > 5) list.splice(0, list.length - 5);
       qqSends.set(sessionId, list);
     }
-    // 2026-11-23 工具侧窗口衰减（用户拍板）：窗口内第 1 次 ×0.6（照旧冷却），
-    // 第 5 次追加一次 ×0.6（跳过冷却）；每窗口最多两次。
-    const { first, second } = Boredom.onToolCall(state.boredom, now, tuning);
-    if (first > 0 || second > 0) {
-      const batch = [];
-      if (first > 0) {
-        batch.push({
-          ts: now, block: '无聊', emotion: '无聊',
-          delta: -Math.round(first * 10) / 10,
-          reason: `做了件事（${exec.name}）×0.6`
-        });
-      }
-      if (second > 0) {
-        batch.push({
-          ts: now, block: '无聊', emotion: '无聊',
-          delta: -Math.round(second * 10) / 10,
-          reason: `做了件事（${exec.name}）×0.6（1小时内第5次）`
-        });
-      }
-      fireAndForget(log.appendBatch(batch));
+    // E30（2026-11-25 用户拍板）：工具侧衰减仍是「做一件事 ×0.6」，但它只是
+    // A —— 落地即开轮次窗口（A 那轮 = 第 0 轮），不再按调用次数往 5 数。
+    // 计数用的「本轮调过工具」在这里记；B 在 turn/end 才结算。
+    // 计数口径（2026-11-25 用户补充）：本轮要调过 qq_bridge_send **以外**的
+    // 工具才算「干过活」——她在 QQ 上纯发消息不算干活，那一轮不推进计数。
+    if (sessionId && exec?.name !== 'qq_bridge_send') turnHasWork.set(sessionId, true);
+    const first = Boredom.drop(state.boredom, now, 'tool', tuning);
+    if (first > 0) {
+      Boredom.startCountWindow(state.boredom, now);
+      if (sessionId) aTurn.set(sessionId, true);
+      fireAndForget(log.append({
+        ts: now, block: '无聊', emotion: '无聊',
+        delta: -Math.round(first * 10) / 10,
+        reason: `做了件事（${exec.name}）×0.6`
+      }));
       stateDirty = true;
       saveStateIfDirty(now).catch(() => {});
     }
