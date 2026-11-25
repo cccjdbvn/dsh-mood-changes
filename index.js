@@ -6,6 +6,7 @@ import { MoodPool } from './lib/pool.js';
 import { Judge } from './lib/judge.js';
 import { Emotions } from './lib/emotions.js';
 import { MoodLog } from './lib/log.js';
+import { JudgeLog } from './lib/judge-log.js';
 import { Coupling } from './lib/coupling.js';
 import { Missing } from './lib/missing.js';
 import { Boredom } from './lib/boredom.js';
@@ -74,17 +75,47 @@ function capJudgeText(s, max = 2000) {
 }
 
 /**
- * 判句用的用户侧文本（E25，2026-11-25 用户明确：**只读，不拦截**）。
- * QQ 桥注进来的消息原样读给判官 —— 不改写、不过滤、不改变消息流；
- * 唯一的处理是长度上限（判官后端上下文很小，超长直接换词表就白判了）。
- * 非 QQ 来源一个字不动。
+ * 判句行（E27，2026-11-25 用户要求）：每条入站消息定一个「谁在说」的行，
+ * 按时间顺序拼给判官（#4）。来源区分（#3）在这里落地：
+ *
+ * - QQ 桥（`plugin:dsh-qq-bridge`）：拆掉 `[QQ · 私聊]` 前缀和「（回 QQ 用…）」
+ *   指令行；**昵称在 ownerNames 里（且私聊）→ `用户：内容`**，别人 → `昵称：内容`
+ *   （群里也一样，群名不带进去）。#5/#6
+ * - 世界生活线（`dsh-world-life`）→ `【生活线】…`：定时提醒，不是用户说的。
+ * - `runtime-context` / `time-context`：harness 脚手架，不进判句。
+ * - 其它（桌面端输入、rpc、空 kind…）→ `用户：内容`。
  * @param {string} kind - message.source.kind
  * @param {string} text - 消息正文
- * @returns {string} 给判官的文本
+ * @param {boolean} isOwner - ownerFromSource 的结果
+ * @returns {string} 判句行；不需要进判句的返回 ''
  */
-export function judgeTextFor(kind, text) {
-  const raw = typeof text === 'string' ? text : '';
-  return kind === QQ_BRIDGE_KIND ? capJudgeText(raw) : raw;
+export function judgeLineFor(kind, text, isOwner = false) {
+  const raw = typeof text === 'string' ? text.trim() : '';
+  if (!raw) return '';
+  if (kind === QQ_BRIDGE_KIND) return qqJudgeLine(raw, isOwner);
+  if (kind === 'dsh-world-life') return `【生活线】${capJudgeText(raw, 800)}`;
+  if (kind === 'runtime-context' || kind === 'time-context') return '';
+  if (kind === 'plugin:dsh-mood-changes') return '';
+  return `用户：${capJudgeText(raw, 1200)}`;
+}
+
+/** QQ 桥消息 → 「用户：…」/「昵称：…」；未唤醒摘要保留成一段带标记的文本。 */
+function qqJudgeLine(raw, isOwner) {
+  // 桥贴在每条入站下面的「回 QQ 怎么回」指令行，判官不需要。
+  const body = raw
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*[（(]\s*回\s*QQ/.test(line))
+    .join('\n')
+    .trim();
+  if (!body) return '';
+  // 未唤醒期间的聊天记录摘要：内部已经带「昵称: 内容」，整体标注来源即可。
+  if (/^\[QQ 未唤醒期间聊天记录/.test(body)) return `【QQ 聊天记录】${capJudgeText(body, 1500)}`;
+  const noPrefix = body.replace(/^\[QQ[^\]]*\]\s*/, '');
+  const m = noPrefix.match(/^([^：:\n]{1,40})[：:]\s*([\s\S]*)$/);
+  if (!m) return capJudgeText(noPrefix, 1200);
+  const who = m[1].trim();
+  const said = m[2].trim();
+  return `${isOwner ? '用户' : who}：${capJudgeText(said, 1200)}`;
 }
 
 /**
@@ -103,27 +134,24 @@ export function qqSendTextOf(exec) {
 }
 
 /**
- * 拼判官这一轮的行（E25）：用户行 + 她的回复 + 她经 qq_bridge_send 发去
- * QQ 的话（同一句已经在她回复里就不重复喂）。内容一律原样。
- * @param {{text:string, judgeText?:string}[]} users
+ * 拼判官这一轮的行（E27）：所有入站行按时间排（生活线 / QQ / 桌面端 / 工具
+ * 发出的话混在一起，谁先谁后一目了然），最后是她的回复。工具发出去的话若
+ * 已经在她的回复里，不重复喂。
+ * @param {{ts?:number, kind?:string, line?:string, text?:string}[]} events
  * @param {string} reply
- * @param {string[]} sends
  * @returns {string[]}
  */
-export function buildRoundLines(users, reply, sends = []) {
+export function buildRoundLines(events, reply) {
   const lines = [];
-  for (const u of users || []) {
-    const text = (u.judgeText ?? u.text ?? '').trim();
-    if (text) lines.push(`用户：${text}`);
-  }
+  const sorted = [...(events || [])].sort((a, b) => (a?.ts ?? 0) - (b?.ts ?? 0));
   const herText = (typeof reply === 'string' ? reply : '').trim();
-  if (herText) lines.push(`她：${herText}`);
-  for (const sent of sends || []) {
-    const s = String(sent || '').trim();
-    if (!s) continue;
-    if (herText && herText.includes(s)) continue;
-    lines.push(`她（QQ 发出）：${s}`);
+  for (const e of sorted) {
+    const line = typeof e?.line === 'string' ? e.line.trim() : '';
+    if (!line) continue;
+    if (e.kind === 'send' && herText && e.text && herText.includes(e.text)) continue;
+    lines.push(line);
   }
+  if (herText) lines.push(`她：${capJudgeText(herText, 2000)}`);
   return lines;
 }
 
@@ -138,6 +166,8 @@ export function apply(ctx, config) {
   const judge = new Judge(config);
   const emotions = new Emotions();
   const log = new MoodLog(worldDir);
+  // 判官判定记录：独立文件，判官每次调用都落一行（含「判了但没变化」）。
+  const judgeLog = new JudgeLog(worldDir);
   const ownerNames = config.ownerNames || [];
 
   // Mutable state (loaded from disk on start)
@@ -170,7 +200,7 @@ export function apply(ctx, config) {
 
   // Per-session turn bookkeeping (one emotion pool, many sessions):
   // user messages collected during the open turn + her streamed reply.
-  const turnUserTexts = new Map(); // sessionId -> [{text, isOwner, judgeText}]
+  const turnUserTexts = new Map(); // sessionId -> [{ts, kind, isOwner, text, line}]
   const pendingReplies = new Map(); // sessionId -> string
   const qqSends = new Map(); // sessionId -> string[]（这一轮 qq_bridge_send 发出的文本）
 
@@ -195,6 +225,10 @@ export function apply(ctx, config) {
     state = await store.loadState();
     baselineRef.current = await store.loadBaseline();
     tuning = await loadTuning(worldDir);
+    // 2026-11-25（E27）：把它当作「刚醒来」——不这么设，插件一启动就看到
+    // lastActivityAt=0，夜里也会按小时往 inbox 里排状态条，早上第一次醒时
+    // 几条一起被 splice（「连续三次执行请求、数值还各不相同」）。
+    lastActivityAt = Date.now();
     if (!state.queue) state.queue = [];
     // Backfill newer fields on old state files.
     if (!state.missing) state.missing = { value: 0, lastDropAt: 0, lastNotifyAt: 0, lastRoll: 0, lastHitAt: 0, manualDay: '', manualSum: 0 };
@@ -454,7 +488,13 @@ export function apply(ctx, config) {
     tryKnock(now);
 
     // 9. Maybe inject status bar
-    if (StatusBar.shouldInject(state, now)) {
+    // 2026-11-25（E27）：只在她「在场」时塞状态条——30 分钟内有过消息才算。
+    // 她不在场时（夜里、长时间没人说话）注入的消息会堆在 inbox 里，等下一次
+    // 醒来被一次性 splice 进来：3 条「收到执行请求」、每条还是生成那一刻的
+    // 旧数值（08:50 / 48.9、45.4、42.4 就是这么来的）。
+    const STATUS_ACTIVE_WINDOW_MS = 30 * 60000;
+    const sheIsHere = lastActivityAt > 0 && (now - lastActivityAt) <= STATUS_ACTIVE_WINDOW_MS;
+    if (sheIsHere && StatusBar.shouldInject(state, now)) {
       const agents = ctx.get('agents');
       const target = targetSessionId();
       let delivered = 0;
@@ -593,10 +633,11 @@ export function apply(ctx, config) {
     const isOwner = ownerFromSource(kind, text, ownerNames);
 
     // Collect for the open turn (fed to the judge at turn/end).
-    // judgeText 是清掉 QQ 桥脚手架后的正文（E25）；text 原样留着给主人判定。
+    // line 是给判官看的那一行（已按来源改写：#3/#5/#6），text 原样留着给
+    // 主人判定与无聊降值；line 为空（harness 脚手架）时只记账不进判句。
     let users = turnUserTexts.get(sessionId);
     if (!users) { users = []; turnUserTexts.set(sessionId, users); }
-    users.push({ text, isOwner, judgeText: judgeTextFor(kind, text) });
+    users.push({ ts: now, kind: 'user', isOwner, text, line: judgeLineFor(kind, text, isOwner) });
 
     const logBatch = [];
 
@@ -660,10 +701,16 @@ export function apply(ctx, config) {
     pendingReplies.delete(sessionId);
     qqSends.delete(sessionId);
 
-    // E25：QQ 桥注入的消息原样读进判句，她经 qq_bridge_send 发去 QQ 的话
-    // 也算她说的 —— 两条都只读，不改写、不拦截。
-    const roundLines = buildRoundLines(users, reply, sends);
-    const userTexts = users.map(u => u.judgeText ?? u.text).filter(t => t && t.trim());
+    // E27（2026-11-25 用户要求）：把这一轮的所有入站按时间顺序送判官——
+    // 生活线提醒、QQ 来消息、她用 qq_bridge_send 发出去的话、以及最后的回复。
+    const events = users.concat(sends.map((s) => ({
+      ts: s.ts,
+      kind: 'send',
+      text: s.text,
+      line: `她（QQ 发出）：${s.text}`
+    })));
+    const roundLines = buildRoundLines(events, reply);
+    const userTexts = events.filter(e => e.kind === 'user' && e.line).map(e => e.line);
 
     // The judge's second-level window is the rounds BEFORE this one; capture
     // it before this round enters the context.
@@ -686,17 +733,63 @@ export function apply(ctx, config) {
       result = await judge.judge(roundText, priorWindow, fallbackText);
     } catch (e) {
       ctx.logger?.warn?.('[dsh-mood-changes] judge error:', e);
+      fireAndForget(judgeLog.append({
+        at: now,
+        ok: false,
+        stage: 'call',
+        error: String(e?.message ?? e),
+        round: clipRound(roundText)
+      }));
       return;
     }
-    if (!result) return;
+    if (!result) {
+      fireAndForget(judgeLog.append({
+        at: now,
+        ok: false,
+        stage: 'empty',
+        error: '判官没有返回结果',
+        round: clipRound(roundText)
+      }));
+      return;
+    }
 
-    await consumeJudge(result, users, now);
+    const applied = await consumeJudge(result, users, now);
+    // 无论有没有情绪入账、有没有触发状态，这一条都写。
+    fireAndForget(judgeLog.append({
+      at: now,
+      ok: true,
+      clear: result.clear,
+      confidence: result.confidence,
+      about: result.about,
+      emotions: (result.emotions || []).map((e) => ({
+        key: e.key,
+        intensity: e.intensity,
+        evidence: e.evidence
+      })),
+      applied: applied?.applied ?? [],
+      states: applied?.states ?? [],
+      skipped: applied?.skipped ?? [],
+      verdict: applied?.applied?.length || applied?.states?.length ? 'deposited' : 'no-change',
+      round: clipRound(roundText)
+    }));
+  }
+
+  /** 判定记录里的对话摘要：留 400 字，够认人；不截断进去会撑大 jsonl。 */
+  function clipRound(text) {
+    const s = String(text ?? '').replace(/\s+/g, ' ').trim();
+    return s.length > 400 ? s.slice(0, 400) + '…' : s;
   }
 
   // --- Consume the judge verdict: HER emotion straight into the pool ---
 
   async function consumeJudge(result, roundUsers, now) {
-    if (!result.emotions || result.emotions.length === 0) return;
+    // 摘要只给判官记录用，不改变任何数值行为。
+    const applied = [];
+    const states = [];
+    const skipped = [];
+    if (!result.emotions || result.emotions.length === 0) {
+      return { applied, states, skipped, empty: true };
+    }
 
     const about = result.about || 'unknown';
     const isOwnerRound = roundUsers.some(u => u.isOwner); // when:'fromUser'
@@ -717,10 +810,17 @@ export function apply(ctx, config) {
 
       const cap = await emotions.capFor(key);
       const score = herEmotion.intensity * cap;
-      if (score < 0.15 * cap) continue;
+      // 2026-11-25 用户要求：入账门槛 0.15 → 0.10（judge.js 的过滤同步改）。
+      if (score < 0.1 * cap) {
+        skipped.push({ key, intensity: herEmotion.intensity, score, reason: `低于入账门槛 ${0.1 * cap}` });
+        continue;
+      }
 
       const deltas = MoodPool.calculateWeighted(weights, score, cap);
-      if (deltas.length === 0) continue;
+      if (deltas.length === 0) {
+        skipped.push({ key, intensity: herEmotion.intensity, score, reason: '权重算不出任何变化' });
+        continue;
+      }
 
       // A5: multiply by the composite state modifiers AT JUDGE TIME,
       // plus 待办5③: 「护着」 adds anger ×1.1 only when about='other' (her
@@ -746,6 +846,7 @@ export function apply(ctx, config) {
       if (stateDef) {
         if (stateDef.when === 'fromUser' && !isOwnerRound) continue;
         States.activate(state.states, stateDef, now, key);
+        states.push({ key, name: stateDef.name, minutes: stateDef.minutes || 60 });
         logBatch.push({
           ts: now, block: '状态', emotion: stateDef.name,
           delta: 0,
@@ -766,6 +867,13 @@ export function apply(ctx, config) {
         deltas: adjusted,
         ts: now,
         label: `${label} ${key}`,
+        reason: (herEmotion.evidence || '').slice(0, 70)
+      });
+      applied.push({
+        key,
+        label,
+        score,
+        deltas: adjusted.map(d => ({ base: d.base, delta: d.delta })),
         reason: (herEmotion.evidence || '').slice(0, 70)
       });
     }
@@ -803,6 +911,8 @@ export function apply(ctx, config) {
       stateDirty = true;
       saveStateIfDirty(now).catch(() => {});
     }
+
+    return { applied, states, skipped };
   }
 
   // --- session/event wiring (post-commit feed, qq-bridge pattern) ---
@@ -929,7 +1039,7 @@ export function apply(ctx, config) {
     const sentText = qqSendTextOf(exec);
     if (sentText && sessionId) {
       const list = qqSends.get(sessionId) || [];
-      list.push(sentText);
+      list.push({ ts: now, text: sentText });
       if (list.length > 5) list.splice(0, list.length - 5);
       qqSends.set(sessionId, list);
     }
