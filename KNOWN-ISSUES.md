@@ -416,6 +416,21 @@ GET /dsh-mood-changes/tick
 
 ---
 
+## 2026-11-26 下午：E41 设置页去掉「会话 id」，认家只按工作区目录（用户要求）
+
+**要求**：所有跟「指定会话」有关的都改成自动指向工作区下最新会话；设置里不再出现会话 id。
+
+**改法**：
+
+- `lib/config-api.js`：删掉 `targetSessionId` 字段条目；`targetWorkspaceDir` 文案改成「唯一认家方式」。
+- `index.js` Schema：`targetSessionId` 标注【已弃用】（只为兼容旧 profile 保留，配了目录后不生效）；`targetWorkspaceDir` 文案同步。
+- `README.md` / `docs/DETAIL.md`：配置表只剩 `targetWorkspaceDir`，风险提示改成「建议配好工作目录」。
+- 逻辑不用动：`targetSessionId()` 本来就是目录优先、会话 id 兜底。
+
+**回归**：全量 **467 项通过 / 0 挂**。
+
+---
+
 ## 2026-11-26 下午：E40 敲门静默失败——重启后 statusBars 是空的（用户现场：药丸「18 分钟前掷中」）
 
 **现场**：用户发现无聊掷中了（`boredom.lastRoll=14:03:36`、`lastRollHit=true`），但 DSH 未归档会话和 QQ 都没有收到敲门；`boredom.lastNotifyAt` 还停在 11-25 15:58，说明 `delivered=0`。唯一能看到的是药丸上「18 分钟前掷中」。

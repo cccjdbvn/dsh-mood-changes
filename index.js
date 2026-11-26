@@ -27,8 +27,11 @@ export const Config = Schema.object({
   judgeTemperature: Schema.number().default(0.3).description('判官采样温度'),
   tickIntervalMs: Schema.number().default(900000).description('tick 间隔（毫秒，默认 15 分钟）'),
   ownerNames: Schema.array(Schema.string()).default([]).description('主人在 QQ 消息里的显示名；群聊一律不降思念，私聊且名字在列表里才降'),
-  targetSessionId: Schema.string().default('').description('只认这个会话的消息流（她的会话 id）；留空 = 所有会话都算她的（工作会话会被误入账）。配了 targetWorkspaceDir 时以目录为准'),
-  targetWorkspaceDir: Schema.string().default('').description('按工作目录自动认家：找该目录下最新创建、未归档、活着的根会话；投送状态条/敲门、判句来源、思念/无聊降值都用它。配了它就不用 targetSessionId；留空 = 退回按会话 id'),
+  // 2026-11-26 用户要求：认家只按工作区目录（最新的根会话），会话 id 不再是配置项。
+  // 这个字段只为兼容旧 profile 保留，设置页和文档都不再暴露；逻辑上仅在没配
+  // targetWorkspaceDir 时当兜底，实际不会用到。
+  targetSessionId: Schema.string().default('').description('【已弃用】按会话 id 认她的会话；请改用 targetWorkspaceDir，配了目录后本字段不生效'),
+  targetWorkspaceDir: Schema.string().default('').description('她的工作目录：插件自动认这个目录下最新创建、未归档、活着的根会话（投送状态条/敲门、判句来源、思念/无聊降值都用它）；换会话自动跟上；留空 = 所有会话都算她的（不推荐）'),
 });
 
 /** Extract plain text from a message whose content may be a string or blocks. */

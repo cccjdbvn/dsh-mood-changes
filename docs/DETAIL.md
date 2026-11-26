@@ -23,8 +23,7 @@
 | `judgeModel` | — | 模型名（vLLM 填模型路径） |
 | `judgeTimeout` | 6000 | 判句超时（毫秒） |
 | `judgeContextPath` | （空） | 判官语境文件路径（Markdown，每次判句读取，改完即生效） |
-| `targetWorkspaceDir` | （空） | 按工作目录自动认家：该目录下最新创建、未归档、活着的根会话；投送/判句/降值都认它，换会话自动跟上 |
-| `targetSessionId` | （空） | 兜底：只认这个会话的消息流；没配 `targetWorkspaceDir` 时才生效 |
+| `targetWorkspaceDir` | （空） | **唯一认家方式**：该目录下最新创建、未归档、活着的根会话就是她；投送/判句/降值都认它，换会话自动跟上 |
 | `ownerNames` | `[]` | 主人在 QQ 消息里的显示名（思念只对私聊里的这些人降） |
 | `tickIntervalMs` | 900000 | 心跳间隔（默认 15 分钟） |
 
