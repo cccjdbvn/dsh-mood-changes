@@ -455,6 +455,12 @@ export function apply(ctx, config) {
     if (delivered > 0) {
       resetSummary(now);
       state.lastInjectAt = now; // a knock also opens a new summary segment
+    } else {
+      // 投递失败要说出来：以前静默，掷中的机会被吞掉也查不到。
+      const live = agents?.list?.().length ?? 0;
+      ctx.logger?.warn?.(
+        `[dsh-mood-changes] knock NOT delivered: target=${target ?? 'null'} liveAgents=${live} statusBars=${statusBars.size} text=${String(text).slice(0, 30)}`
+      );
     }
     return delivered;
   }
@@ -1163,6 +1169,18 @@ export function apply(ctx, config) {
   // --- Init ---
   init().then(() => {
     ctx.logger?.info?.('[dsh-mood-changes] Initialized with worldDir:', worldDir);
+    // 补注册：插件启动时**已经在跑**的 agent 不会再触发 agent/created（重启 DSH 后
+    // 她的会话早就存在），statusBars 空着会让所有敲门静默投递失败（delivered=0，
+    // 掷中的机会白白浪费）。2026-11-26 现场：14:03 无聊掷中却没送到任何会话。
+    try {
+      const agents = ctx.get('agents');
+      for (const agent of agents?.list?.() ?? []) {
+        if (agent?.ctx && !statusBars.has(agent.id)) statusBars.set(agent.id, new StatusBar(agent));
+      }
+      ctx.logger?.info?.('[dsh-mood-changes] statusBars backfilled:', statusBars.size);
+    } catch (e) {
+      ctx.logger?.warn?.('[dsh-mood-changes] statusBars backfill error:', e);
+    }
   }).catch(e => {
     ctx.logger?.warn?.('[dsh-mood-changes] init error:', e);
   });

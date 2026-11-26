@@ -416,6 +416,18 @@ GET /dsh-mood-changes/tick
 
 ---
 
+## 2026-11-26 下午：E40 敲门静默失败——重启后 statusBars 是空的（用户现场：药丸「18 分钟前掷中」）
+
+**现场**：用户发现无聊掷中了（`boredom.lastRoll=14:03:36`、`lastRollHit=true`），但 DSH 未归档会话和 QQ 都没有收到敲门；`boredom.lastNotifyAt` 还停在 11-25 15:58，说明 `delivered=0`。唯一能看到的是药丸上「18 分钟前掷中」。
+
+**根因**：`statusBars` 只在 `agent/created` 里注册。重启 DSH（或插件后加载）时，她的会话 agent **早就存在**，不会再触发 `agent/created`，于是 `knock()` 里 `statusBars.get(agent.id)` 全是 `undefined` → `delivered=0` → `lastNotifyAt` 不更新，掷中的机会被静默吞掉。判句走 `session/event`，不依赖 statusBars，所以「对话读取正常」掩盖了这个问题。
+
+**改法**：`init().then` 里遍历 `ctx.get('agents').list()`，把已存在的 agent 补注册进 `statusBars`；`knock()` 投递失败时打 warn（`target` / `liveAgents` / `statusBars.size` / 文本前 30 字），以后查日志就知道是没匹配到 agent 还是 followup 失败。
+
+**回归**：全量 **467 项通过 / 0 挂**（init 侧补注册 + 诊断日志，不改数值语义）。
+
+---
+
 ## 2026-11-26 下午：E39 「乐」改为内部账 y + 显示映射 x（用户拍板）
 
 **背景**：用户要求把乐的核算换成一条曲线，内部账 y 可以无限累积，面板显示的 x 按曲线压缩：
