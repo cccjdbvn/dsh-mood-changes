@@ -3,6 +3,7 @@ import { watch } from 'node:fs';
 import { join, normalize } from 'node:path';
 import { MoodStore } from './lib/store.js';
 import { MoodPool } from './lib/pool.js';
+import { toY, toX } from './lib/happy.js';
 import { Judge } from './lib/judge.js';
 import { Emotions } from './lib/emotions.js';
 import { MoodLog } from './lib/log.js';
@@ -278,6 +279,14 @@ export function apply(ctx, config) {
   // --- Initialization ---
   async function init() {
     state = await store.loadState();
+    // 「乐」改为内部账 y + 显示映射 x（2026-11-26 用户拍板）：老 state 里 happy 存的是
+    // 显示值，第一次加载时换算成 y 并打标记，避免每次启动都重复换算。
+    if (state && state.happyModel !== 2) {
+      const oldX = state.values?.happy ?? 15;
+      if (!state.values) state.values = {};
+      state.values.happy = toY(oldX);
+      state.happyModel = 2;
+    }
     baselineRef.current = await store.loadBaseline();
     tuning = await loadTuning(worldDir);
     // 2026-11-25（E27）：把它当作「刚醒来」——不这么设，插件一启动就看到
