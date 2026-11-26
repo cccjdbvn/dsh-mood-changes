@@ -416,6 +416,40 @@ GET /dsh-mood-changes/tick
 
 ---
 
+## 2026-11-26 晚上：E49 判官换 Qwen3-8B-FP8，配置栏与模型同步（用户：换模型后配置栏没动）
+
+**用户诉求**：判官换过模型，但设置界面的「插件配置」栏 `judgeModel` 还停在旧路径，跟实际跑的模型对不上。要求：实际模型和配置栏都换成 **3-8B 的 8bit 非 Instruct 版**（= `Qwen3-8B-FP8`，base 版、非思考）；只改配置，重启另挑时间。
+
+**根因**：`start-mood-judge.ps1` 的 `--served-model-name` 故意报旧串 `/mnt/f/ai/model_mood-judge/Qwen2.5-7B-AWQ`（E45 起为「换模型不用改插件」），于是 profile 的 `judgeModel` 也一直指旧路径，配置栏就「没动」。
+
+**改动**：
+- `F:\ai\start-mood-judge.ps1`：`$model` → `/home/dome/models/Qwen3-8B-FP8`；`$served` → `Qwen3-8B-FP8`（直报实际名）；启动命令加 `VLLM_USE_DEEP_GEMM=0`（FP8 e4m3 需要）。
+- profile `cordis.patch.yml`：`judgeModel` → `Qwen3-8B-FP8`。
+- bundle `cordis.patch.yml`：`judgeModel` 从过时的 3B 路径 → `Qwen3-8B-FP8`；`judgeTimeout` 3000 → 6000（对齐 Schema）。
+- `lib/judge.js` fallback 消除死代码口径：`judgeBaseUrl` 1234 → 8000、`judgeTimeout` 3000 → 6000。
+
+**待重启**：`--served-model-name` 是启动参数、`judgeModel` 是 profile 配置，都要重启才生效（判官 + DSH），用户自己挑时间。
+
+---
+
+## 2026-11-26 晚上：E48 乐 y/x 三处漏换算 + 回滚最终补齐基线
+
+**口径（用户拍板）**：乐加分/回滚/衰减走内部账 y；传播/被传播走显示值 x；跟基线比一律看 x；非回滚的减操作（衰减、传播负向）就地不破基线；回滚允许中途暂时破线、收尾 `floorToBaseline` 补齐（六情全适用）。
+
+**三处漏修**（E39 乐改 y/x 后遗留）：
+1. `syncBaselineFromFile`（基线 watcher）拿内部账 y 跟基线 x 直接比、把 x 写成 y——每次写 baseline.json 都把乐错抬（基线 30 时旧代码写 y=30，显示值变成 ~54 而非 30）。
+2. 回滚数值重放只 `Math.max(0, ...)`，没有「回滚后低于基线补齐」。
+3. `newDelta` 改值对乐用 `Math.min(100, ...)` 封顶，但乐的 y 上限是 `Y_MAX` 不是 100。
+
+**改动**：
+- `index.js` `syncBaselineFromFile` 删手写循环，改调 `MoodPool.floorToBaseline(state.values, fresh)`（与 tick 同一真源）。
+- `lib/tools.js` 回滚 `rollbackOne` 收尾加 `MoodPool.floorToBaseline(state.values, baselineRef.current)`；`newDelta` 对乐上限改 `Y_MAX`。
+- `_tmp/mood-smoke/baseline-watch-test.mjs` 的 happy 断言从「内部值 === x」改成「显示值 x」（旧断言恰好吃掉了这个 bug）。
+
+**回归**：22 脚本全绿（0/22 失败）。
+
+---
+
 ## 2026-11-26 晚上：E47 传播只留「水位传播」一套，另两套删除
 
 **背景**：`lib/coupling.js` 里原本有三套「情绪互相影响」的机制，实际只有一套在跑：

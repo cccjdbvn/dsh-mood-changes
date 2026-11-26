@@ -4,8 +4,8 @@
       config:
         judgeBaseUrl: 'http://127.0.0.1:8000/v1'
         judgeApiKey: ''
-        judgeModel: '/mnt/f/ai/model_mood-judge/Qwen2.5-3B-AWQ'
-        judgeTimeout: 3000
+        judgeModel: 'Qwen3-8B-FP8'
+        judgeTimeout: 6000
         judgeTemperature: 0.3
         tickIntervalMs: 900000
         worldDir: ''

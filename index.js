@@ -630,22 +630,16 @@ export function apply(ctx, config) {
   // baseline are lifted up to it, values above it stay (her current higher
   // emotion is kept). Debounced: editors and atomic writes (tmp+rename)
   // fire several events for one change.
-  const BASES = ['happy', 'sad', 'fear', 'anger', 'surprise', 'disgust'];
   let baselineDebounce = null;
   async function syncBaselineFromFile() {
     try {
       const fresh = await store.loadBaseline();
       baselineRef.current = fresh;
       if (state) {
-        let changed = false;
-        for (const base of BASES) {
-          const target = fresh[base] ?? 0;
-          if ((state.values[base] ?? 0) < target) {
-            state.values[base] = target;
-            changed = true;
-          }
-        }
-        if (changed) fireAndForget(store.saveState(state));
+        // 基线校准统一走 floorToBaseline（乐按显示值 x 与基线比、内部账 y 落回），
+        // 不再手写循环——否则「乐」会拿内部账 y 直接跟基线的显示值 x 比较（E39 后的坑）。
+        const lifted = MoodPool.floorToBaseline(state.values, fresh);
+        if (lifted.length > 0) fireAndForget(store.saveState(state));
       }
     } catch (e) { /* a half-written file mid-save: the next event retries */ }
   }
