@@ -308,6 +308,8 @@ export function apply(ctx, config) {
     if (state.boredom.lastRollHit === undefined) state.boredom.lastRollHit = false;
     // 六情上下文上次刷新时间（E28 起；0 = 从没刷新过）
     if (state.lastStatusAt === undefined) state.lastStatusAt = 0;
+    // 传播节奏计数（E46，2026-11-26 起）：每 3 次自动核算才传播一次
+    if (state.tickCount === undefined) state.tickCount = 0;
     // 无聊轮次计数的回填（E30，2026-11-25 起）：countStartAt = 最近一次 A 的
     // 时刻（0 = 没开窗），turnCount = A 之后已数到第几个「调过工具的轮」。
     if (state.boredom.countStartAt === undefined) state.boredom.countStartAt = 0;
@@ -548,10 +550,18 @@ export function apply(ctx, config) {
     // 2. Settle the event queue（只入账，不再逐笔传播；E31）
     settleEntries(store.drainQueue(state), now);
 
-    // 2.5 水位传播（E31，2026-11-25 用户拍板）：只有「自动核算（tick）」这一步
-    // 传播一次，依据**结算后的总值**——源 >60 的溢出 × 矩阵系数，目标正向封顶
-    // 30 且原本 ≥30 不加。强触发的立即结算与她主动的 mood_settle 都不传播。
-    const propagated = Coupling.propagateFromValues(state.values, States.compositeMod(state.states));
+    // 2.5 水位传播（E31；E46 起每三次自动核算才做一次）：只有「自动核算（tick）」
+    // 这一步传播，依据**结算后的总值**——源 >60 的溢出 × 矩阵系数，目标正向封顶
+    // 30、原本 ≥30 不加、**当前值 <20 完全不吃传播**。强触发的立即结算与她主动的
+    // mood_settle 都不传播。节奏计数在 state.tickCount（落盘，重启不清零）。
+    let propagated = [];
+    if (Coupling.shouldPropagateThisTick(state)) {
+      propagated = Coupling.propagateFromValues(
+        state.values,
+        States.compositeMod(state.states),
+        baselineRef.current
+      );
+    }
     if (propagated.length > 0) {
       fireAndForget(log.appendBatch(propagated.map((p) => ({
         ts: now, effectiveAt: now,
@@ -563,8 +573,8 @@ export function apply(ctx, config) {
       }))));
     }
 
-    // 3. Coupling: tick damping（另一条机制，系数 0，未启用）
-    Coupling.dampen(state.values, 0); // Start at 0, increase after a week
+    // 3. （已删）tick 阻尼：那是另一套「值高的慢慢压值低的」机制，从来没用过，
+    //    2026-11-26 按用户要求只保留水位传播，函数已从 lib/coupling.js 删除。
 
     // 4. Missing & Boredom tick
     const missingGain = States.missingGainMultiplier(state.states);
@@ -583,8 +593,9 @@ export function apply(ctx, config) {
       }));
     }
 
-    // 5. Clamp
+    // 5. Clamp + 基线校准（2026-11-26 用户要求：核算最后一步校回基线以上）
     MoodPool.clamp(state.values);
+    MoodPool.floorToBaseline(state.values, baselineRef.current);
 
     // 6. Expire states
     States.expire(state.states, now);

@@ -416,6 +416,99 @@ GET /dsh-mood-changes/tick
 
 ---
 
+## 2026-11-26 晚上：E47 传播只留「水位传播」一套，另两套删除
+
+**背景**：`lib/coupling.js` 里原本有三套「情绪互相影响」的机制，实际只有一套在跑：
+
+| 机制 | 原状 | 处理 |
+|---|---|---|
+| `propagate`（按单笔 delta 逐笔传） | 无任何调用点，`settleEntries` 早就不调了（E31 换掉） | **删** |
+| `dampen`（值高的慢压值低的） | 只有 `index.js` 一处调用，系数**硬编码 0**，从未启用、也没有配置项能打开 | **删**（连调用处一起） |
+| `propagateFromValues`（水位传播） | tick 里唯一的真实调用 | **留** |
+
+**改法**：`lib/coupling.js` 删掉两个 static 方法；`index.js` 删掉 `Coupling.dampen(state.values, 0)` 那行（留一行注释说明为什么没了）。
+
+**测试同步**：`run.mjs` 的 A5 原来测的是死函数 `propagate`，改成测水位传播的状态修饰（`propagateFromValues` + `mods`）；`rollback-test.mjs` 原来靠 `Coupling.propagate` 生成传播日志行，改成直接手写三行（它只关心日志里有传播行，不关心谁生成）。
+
+**回归**：22 脚本 **484 项全过**。
+
+---
+
+## 2026-11-26 晚上：E46 传播的三条节奏/边界规则 + 核算末尾的基线校准
+
+用户描述的目标流程是：**衰减 → 计算 → 传播（三次自动核算一次）→ 校准**。tick 本来就是这个顺序，缺的是边界和节奏：
+
+1. **目标当前值 < 20 完全不吃传播**（加与减都不做）。以前 0 分的块会被零星灌分、也会被压到 0。
+2. **负向传播压到基线为止**，不再一路压到 0。现场：乐显示值约 89（远 >60），每个 tick 都向悲/惧/怒/厌传负值，旧代码压到 0 为止，把四条基线全压穿（悲 2.24/基线 6、惧 1.26/5、怒 0/2、厌 0.21/4）。
+3. **每 3 次自动核算才传播一次**：`Coupling.shouldPropagateThisTick(state)` 计数存 `state.tickCount`（随 state 落盘，重启不清零），模 3 为 0 才传。
+4. **核算末尾加「基线校准」**：`MoodPool.floorToBaseline(values, baseline)`——clamp（0–100）之后再把低于基线的六情抬回基线（乐按显示值 x 比、落回 y）。**目前只在 tick 里调用**；`settleEntries`（判句结算、`mood_settle`）只做 clamp，没有这一步。
+
+**测试**：`run.mjs` 新增 <20 跳过、负向地板、三次节奏、基线校准共 10 项；回归 **22 脚本 484 项全过**。
+
+---
+
+## 2026-11-26 晚上：E45 判官换到 Qwen3-8B-Instruct-GPTQ-Int8，全机删除 4bit/AWQ
+
+**用户决定**：判官暂定 `Qwen3-8B-Instruct-GPTQ-Int8`（8bit，思考模型）；「AWQ 的不留」。
+
+**改动**：`F:\ai\start-mood-judge.ps1` 的 `$model` 指向 `/home/dome/models/Qwen3-8B-Instruct-GPTQ-Int8`，`--gpu-memory-utilization` 0.60 → **0.80**（8B GPTQ 权重约 9.0G）；`--served-model-name` 仍保持旧串 `/mnt/f/ai/model_mood-judge/Qwen2.5-7B-AWQ`，所以 profile 的 `judgeModel` 不用改。删掉的模型：`Qwen2.5-7B-AWQ`、`Qwen2.5-7B-Instruct-AWQ`、`Qwen3.5-9B-AWQ`（ext4）+ `F:\ai\model_mood-judge\Qwen2.5-7B-AWQ`（F 盘备份）。
+
+**换守护时踩的坑**：`schtasks /End` 杀不掉守护脚本的 wsl 子进程，那个孤儿循环会拿**启动时固化的 `$model`** 继续每 60 秒拉起旧模型——即使目录已删、即使新脚本已改，`/v1/models` 仍报旧模型。修法：`Stop-Process` 杀掉那个 powershell 实例（`-File F:\ai\start-mood-judge.ps1`），再 `pkill -9 -f '/home/dome/mood-judge-venv'`，确认 `pgrep -af python` 为空、`nvidia-smi` 回到 ~1.5GB，才 `schtasks /Run`。
+
+**注意**：新判官是思考模型，而运行实例的插件还是 `max_tokens 256`（E43 的 1024 要重启 DSH 才生效）。实测 256 下它也能出有效 JSON（见 E44 的重跑数据），但余量小。
+
+---
+
+## 2026-11-26 下午：E44 判官 prompt 加「括号内是旁白」后又撤掉（用户改主意）
+
+**要求（第一版）**：「给判官的说明里面添一句：括号内的内容按旁白处理，那不是她说的话」。据此在 `data/judge-prompt.md` 加过规则 11。
+
+**要求（第二版，2026-11-26 19:1x）**：「把括号那个标注去掉」——**规则 11 已撤回**，`judge-prompt.md` 恢复成 10 条。语料那 4 条手改（id 5/6/7/10）**保留**：那是她实际说过的话与旁白的边界修正，与提示词无关。
+
+**语料同步**：用户手改了 `judge-corpus-2026-11-24.jsonl` 的 4 条（id 5/6/7/10），把「她的话」与「（旁白）」的边界理正，并把 id 7 被 1200 字上限截断的后半段补全。这些改动以 `OVERRIDES`（按原日志 `at` 定位）写进 `judge-corpus-build.mjs`，重建语料不会被覆盖回去。
+
+**重跑（规则 11 去掉后 + 用户改后语料 + max_tokens 1024）**：
+- `Qwen3.5-9B-AWQ`（4bit，关识图）：`#1 moved:0.72 + light:0.65`、`#6 fond:0.65`、`#8 moved:0.72 + worried:0.68`、`#10 sore:0.75`。
+- `Qwen3-8B-FP8`（思考）：`#6 proud:0.85`、`#10 worried:0.85`。
+- `Qwen3-8B-Instruct-GPTQ-Int8`（思考）：`#1 proud:0.85`、`#6 proud:0.85`、`#8 worried:0.85`、`#10 worried:0.85`。
+
+**换模型测试的教训**（已写进 HANDOVER §2-9）：不许写循环起多个模型的脚本。起失败时 EngineCore 子进程不随主进程退出、`pkill -f vllm.entrypoints` 匹配不到，几个残留就能把 WSL 24GB 吃光（当天真打爆了用户内存）。逐个起、逐个 `pkill -9 -f '<venv>'`、`nvidia-smi` 确认回落到 ~1.5GB 再进行下一个。
+
+---
+
+## 2026-11-26 下午：E43 判官 max_tokens 256 → 1024（用户要求，给思考型模型留额度）
+
+**背景**：判官请求的 `max_tokens` 固定 256。思考型模型（Qwen3 系）的思考与正文**共用**这个额度，256 会被思考吃光，JSON 截断后 `_parseJson` 失败 → 重试一次（思考关不掉）→ 词表兜底，那一条就不是模型判的了。实测：Qwen3-8B-FP8 开思考时，120 token 的探针 100% 花在 `<think>` 上，`finish_reason=length`，一个字的答案都没吐。
+
+**改法**：`lib/judge.js _callLlm` 的 `max_tokens` 改 **1024**。非思考模型没有副作用（判官实际只输出 26–68 token）。
+
+**实测**（Qwen3-8B-FP8，思考开着，同一份语料）：256 与 1024 两版判定**完全相同**（`#8`/`#10` worried 0.85，其余 no-change），平均 2468ms → 2192ms。说明这批短判句模型本来就收得住思考，1024 只是把余量拉宽、消除截断概率。
+
+**顺带发现（工程坑，换模型测试必踩）**：`schtasks /End /TN mood-judge-vllm` 只杀 PowerShell 实例，守护里那条 `wsl -d ... bash -c` 子进程会变成孤儿继续循环；pkill 掉 vLLM 后它 60 秒又拉起 7B-AWQ 抢回 8000，表现为「health 通、Windows 侧请求 3ms 就 ECONNREFUSED」。停干净要两条：`pkill -f vllm-judge.log`（杀孤儿守护）+ `pkill -9 -f 'vllm[.]entrypoints'`（杀服务）。另外 WSL 的 localhost 转发在服务刚就绪时可能还没建好，脚本里 health 通过后再等 8 秒更稳。
+
+---
+
+## 2026-11-26 下午：E42 判官测试语料固化（用户要求：按现在的处理方式清洗整份 judge-log）
+
+**背景**：`judge-log/2026-11-24.jsonl` 的 10 条 `round` 是 E27 之前的产物——`<system-reminder>` 运行时快照、`Time sampled while preparing turn…` 时间戳、AGENTS.md 更新通知、`[QQ · 私聊]` 前缀、「（回 QQ 用 [QQ]…[/QQ]）」指令行全都混在判句输入里（10 条里 3 条中招）。拿这种脏 round 当判官回归基准，会把「判官在看噪声」测成「判官判不出情绪」。
+
+**做法**：按**现行**输入规则重清洗，产出固定语料 `dsh-mood-private/judge-corpus-2026-11-24.jsonl`：
+
+- 脚手架整段丢弃（按 `judgeLineFor` 映射到 `runtime-context` / `time-context` / `agent-instructions`，并断言返回空行）；
+- QQ 消息拆掉 `[QQ · 私聊]` 前缀、按行过滤掉「（回 QQ 用…）」，主人 → `用户：`；
+- 她的内心独白（`她：`）与 QQ 发言（`她（QQ 发出）：`）合并成一条 `她：`；
+- 清洗逻辑**直接 import 插件的 `judgeLineFor` / `buildRoundLines`**，不另写一套——插件规则变了，重建语料自动同口径。
+
+**产物**：`judge-corpus-2026-11-24.jsonl`（10 条，含 `rawJudge` 旧判定作对照）+ `judge-corpus-build.mjs`（生成器，只读 judge-log）。此后判官效果测试跑 `_tmp/mood-smoke/judge-corpus.mjs`，不再用硬编码假句（`judge-10.mjs` 仅留作早期对照）。
+
+**首次对照结果**（7B AWQ、VB prompt、一级判句、无 window）：旧日志 10 条全 no-change，清洗后新判出 5 条——`#3 light`、`#4 curious`、`#7 worried`、`#9 light`、`#10 sore`；`#5`「好」走 ≤5 字词表直接返回；平均 1977ms。`#10`（用户说「惹你着急了」→ 她答「不是急，是心疼」）判成 `sore`，显然是误判，可作为后续语境/示例调优的靶子。
+
+**语料调整（2026-11-26 15:30，用户要求）**：剔除原第 1 条（00:17「又修了个东西」），把用户给的 2026-11-25 22:57「想做的事不多，宠老婆算一件」按同一规则清洗后放在最前，仍是 10 条。生成器用 `DROP_AT`（按 at 剔除）与 `EXTRA`（手工追加条）表达，不手改 JSONL。
+
+**四个 7B 变体对照（2026-11-26 15:2x，同一语料逐条跑）**：原始输出在 `/home/dome/model-test/<模型>.txt`。`Qwen2.5-7B-AWQ` 与 `Qwen2.5-7B-Instruct-AWQ`（官方）判定完全一致（#3 light / #4 curious / #7 worried / #9 light / #10 sore）；`Qwen2.5-7B-FP8` 与 `Qwen2.5-7B-Instruct-GPTQ-Int8` 也互相一致（#6 light / #7 worried / #8 worried / #10 worried，FP8 在 #10 还多给 soft:0.4）。FP8 首个请求约 30 秒预热（两次超时后走词表兜底），第 3 条起恢复 1–4 秒。
+
+---
+
 ## 2026-11-26 下午：E41 设置页去掉「会话 id」，认家只按工作区目录（用户要求）
 
 **要求**：所有跟「指定会话」有关的都改成自动指向工作区下最新会话；设置里不再出现会话 id。
