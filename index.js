@@ -196,8 +196,31 @@ export function apply(ctx, config) {
     return;
   }
 
+  /**
+   * 判句配置「热读取」：每次判句时读当前 profile 实时层
+   * （configEditor.configuration() 会重新 loadProfileDirectory 读文件），
+   * 手改 cordis.patch.yml 后不用重启 DSH 也能跟上；读不到时退回 apply 快照。
+   * 2026-11-26 用户要求：改配置别每次重启。
+   */
+  const liveConfig = () => {
+    const editor = ctx.get('configEditor');
+    const entry = ctx.fiber?.entry;
+    if (!editor || typeof editor.configuration !== 'function' || !entry) return config;
+    const id = String(entry?.options?.id ?? entry?.id ?? '');
+    if (!id) return config;
+    try {
+      const rows = editor.configuration();
+      const row = rows.find((r) => String(r?.entry?.options?.id ?? r?.entry?.id ?? '') === id);
+      if (!row) return config;
+      // inherited：bundle 继承层；override：profile 显式层（手改后的最新值，优先级最高）
+      return { ...config, ...(row.inherited || {}), ...(row.override || {}) };
+    } catch {
+      return config;
+    }
+  };
+
   const store = new MoodStore(worldDir);
-  const judge = new Judge(config);
+  const judge = new Judge(config, liveConfig);
   const emotions = new Emotions();
   const log = new MoodLog(worldDir);
   // 判官判定记录：独立文件，判官每次调用都落一行（含「判了但没变化」）。

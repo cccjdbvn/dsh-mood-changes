@@ -4,7 +4,7 @@
       config:
         judgeBaseUrl: 'http://127.0.0.1:8000/v1'
         judgeApiKey: ''
-        judgeModel: 'Qwen3-8B-FP8'
+        judgeModel: 'Qwen3-8B-Instruct-GPTQ-Int8'
         judgeTimeout: 6000
         judgeTemperature: 0.3
         tickIntervalMs: 900000

@@ -50,7 +50,7 @@
 | [llama.cpp](https://github.com/ggerganov/llama.cpp) | 进阶用户 |
 | [vLLM](https://github.com/vllm-project/vllm) | 需要 GPU |
 
-判官模型**建议 7B 及以上**（7B–8B 级的量化模型都够用；本机当前用 `Qwen3-8B-FP8`）。**不建议 3B 及以下**：短句、反讽、情绪强度容易判偏，而判歪比判不出来更伤账（宁可让它给 `clear:false`、走词表降级）。能稳定输出 JSON 的量化模型即可。
+判官模型**建议 7B 及以上**（7B–8B 级的量化模型都够用；本机当前用 `Qwen3-8B-Instruct-GPTQ-Int8`）。**不建议 3B 及以下**：短句、反讽、情绪强度容易判偏，而判歪比判不出来更伤账（宁可让它给 `clear:false`、走词表降级）。能稳定输出 JSON 的量化模型即可。
 
 ### 装插件
 

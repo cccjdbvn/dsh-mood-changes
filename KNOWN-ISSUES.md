@@ -416,6 +416,60 @@ GET /dsh-mood-changes/tick
 
 ---
 
+## 2026-11-26 深夜：E53 配置热更新——设置界面与 profile 双向同步、判句配置热读取
+
+**用户要求**：改配置别每次重启 DSH。
+
+**两处改动**：
+
+1. **设置界面 ↔ profile 双向同步**（`lib/config-api.js`）：`GET /config` 原来读 `apply` 启动快照，手改 `cordis.patch.yml` 后设置页不更新。改成优先调 `configEditor.configuration()`（它会重新 `loadProfileDirectory` 读文件）取「profile 实时层」，读不到时回退快照。这样：设置界面改 → `configEditor.edit` 写盘 + 重载（原有）；手改 profile → 设置界面重开即最新。
+2. **判句配置热读取**（`lib/judge.js` + `index.js`）：`Judge` 构造接收 `getLiveConfig`，每次 `_callLlm` / `_contextSection` 读实时配置（`judgeBaseUrl` / `judgeModel` / `judgeApiKey` / `judgeTimeout` / `judgeTemperature` / `judgeContextPath`），不再用启动快照。手改 profile 的判官配置后，下一次判句即生效，不用重启 DSH。
+
+**范围**：`worldDir` / `targetWorkspaceDir` / `ownerNames` / `tickIntervalMs` 这类「启动时决定 state 目录 / 会话归属 / 定时器」的配置仍需重启；只有判官相关配置走热读取。
+
+**生效**：重启 DSH 一次（加载新代码），之后手改 profile 的判官配置就能热生效。
+
+---
+
+## 2026-11-26 深夜：E52 判官判句采样参数固定为 temperature 0.3 / top_k 40 / top_p 0.95
+
+**用户要求**：判官判定时显式覆盖采样参数——`temperature 0.3 / top_k 40 / top_p 0.95`，不要走模型的 generation_config 默认（`temperature 0.6 / top_k 20 / top_p 0.95`）。
+
+**改动**：
+- `lib/judge.js` `_callLlm` 请求体：加 `top_k: 40, top_p: 0.95`（显式）；`temperature` 仍从配置读（`judgeTemperature`）。
+- profile `cordis.patch.yml`：`judgeTemperature` 0.1 → **0.3**。
+- 判句时实际生效：`temperature 0.3 / top_k 40 / top_p 0.95`。
+
+**注意**：`top_k`/`top_p` 是判句专用、不另设配置项（避免再出现「配置 vs 实际不同步」）；`temperature` 仍可在设置页调。
+
+**生效**：judge.js 是代码、profile 是配置，都要**再重启一次 DSH**。
+
+---
+
+## 2026-11-26 深夜：E51 判官换回 Qwen3-8B-Instruct-GPTQ-Int8（E49 的反转）
+
+**用户决定**：E49 换成 `Qwen3-8B-FP8`（base、非 Instruct）后，用户当晚又要求**换回 `Qwen3-8B-Instruct-GPTQ-Int8`**（8bit GPTQ，思考模型）。判官质量优先于「非 Instruct」偏好。
+
+**改动**：
+- `F:\ai\start-mood-judge.ps1`：`$model` → `/home/dome/models/Qwen3-8B-Instruct-GPTQ-Int8`；`$served` → `Qwen3-8B-Instruct-GPTQ-Int8`（直报实际名）；启动命令**去掉** `VLLM_USE_DEEP_GEMM=0`（那是 FP8 才需要的），保留 `VLLM_USE_FLASHINFER_SAMPLER=0`。
+- profile / bundle `cordis.patch.yml`：`judgeModel` → `Qwen3-8B-Instruct-GPTQ-Int8`。
+- 注释同步：`#7` 改回「思考模型，max_tokens 1024」、`#68` 改回「8B GPTQ 9.0G」。
+
+**注意**：Instruct-GPTQ-Int8 是思考模型，E43 的 `max_tokens 1024` 必须保留（否则思考吃光 JSON）。重启判官 + DSH 后生效。
+
+---
+
+## 2026-11-26 深夜：E50 判官 evidence 约束：主语是「她」、别照抄/挑词
+
+**用户要求**：判官输出的 `evidence`（写进日志「原因」列）要写一句话，概括这一轮**她**产生情绪的原因；主体是「她」，例如「用户撩逗她，她害羞了」「她画了幅画，很有成就感」「事情解释清楚，她心里轻快了」。
+
+**改动**（`data/judge-prompt.md`，输出格式段后加一段）：
+> `evidence` 写一句话，概括这一轮**她产生情绪的原因**：可以是用户/其他人说了什么话、做了什么事，也可以是她自己有什么回应或动作。**这句话的主体是「她」**——写清「因为发生了什么，所以她怎么了」，比如「用户撩逗她，她害羞了」「她画了幅画，很有成就感」「事情解释清楚，她心里轻快了」。一句话说清即可，不要照抄整段对话或挑单个词汇，也不要只写情绪名。
+
+**未动**：`judge-schema.json` 的 `evidence.maxLength` 仍是 30（用户没要求放宽；示例都在 30 字内）。重启 DSH 后生效。
+
+---
+
 ## 2026-11-26 晚上：E49 判官换 Qwen3-8B-FP8，配置栏与模型同步（用户：换模型后配置栏没动）
 
 **用户诉求**：判官换过模型，但设置界面的「插件配置」栏 `judgeModel` 还停在旧路径，跟实际跑的模型对不上。要求：实际模型和配置栏都换成 **3-8B 的 8bit 非 Instruct 版**（= `Qwen3-8B-FP8`，base 版、非思考）；只改配置，重启另挑时间。
@@ -429,6 +483,8 @@ GET /dsh-mood-changes/tick
 - `lib/judge.js` fallback 消除死代码口径：`judgeBaseUrl` 1234 → 8000、`judgeTimeout` 3000 → 6000。
 
 **待重启**：`--served-model-name` 是启动参数、`judgeModel` 是 profile 配置，都要重启才生效（判官 + DSH），用户自己挑时间。
+
+> 注：当晚用户又要求换回 `Qwen3-8B-Instruct-GPTQ-Int8`，见 E51。
 
 ---
 
